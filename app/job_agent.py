@@ -32,7 +32,7 @@ CONFIG = Path(os.environ.get("APPDATA", Path.home())) / "GermanyJobAgent" / "set
 NPM = Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules"
 DEFAULTS = {"apify_token": "", "linkedin": True, "indeed": True, "stepstone": True, "linkedin_max": 400,
             "check_top": 60, "parallel": 3, "claude_model": "sonnet", "claude_effort": "medium",
-            "codex_model": "", "codex_effort": "medium"}
+            "codex_model": "", "codex_effort": "medium", "sort": "best"}
 KEEP_DAYS = 21  # jobs not seen again for this long leave the list, unless he applied or built something for them
 CHECK_FIELDS = ("status", "apply_url", "apply_check", "checked", "snippets", "workplace_hint", "lang", "domain")
 ACTIVE = ("analyzing", "building")
@@ -102,6 +102,24 @@ def window_days(last_check: str, at: dt.datetime) -> int:
         return 7
     gap = (at - dt.datetime.fromisoformat(last_check)).total_seconds() / 86400
     return max(1, min(7, math.ceil(gap) + 1))
+
+
+def posted(j: dict, at: dt.datetime) -> tuple:
+    """(sort key, "5 hours ago"): when the job was posted, to the minute where the source gives a time (freehire,
+    Arbeitnow, StepStone, Indeed, fresh LinkedIn jobs), otherwise to the day (the Bundesagentur, older LinkedIn jobs)."""
+    s = j.get("posted_at") or j.get("published") or ""
+    try:
+        ts = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return "", ""
+    if len(s) <= 10:  # a date only
+        days = (at.date() - ts.date()).days
+        return ts.isoformat(timespec="seconds"), "today" if days <= 0 else "yesterday" if days == 1 else f"{days} days ago"
+    ts = ts.astimezone().replace(tzinfo=None) if ts.tzinfo else ts  # to this PC's time, like `at`
+    mins = max(0, int((at - ts).total_seconds() // 60))
+    ago = ("just now" if mins < 2 else f"{mins} minutes ago" if mins < 60 else "1 hour ago" if mins < 120 else
+           f"{mins // 60} hours ago" if mins < 1440 else "1 day ago" if mins < 2880 else f"{mins // 1440} days ago")
+    return ts.isoformat(timespec="seconds"), ago
 
 
 def parse_json(text: str) -> dict:
@@ -425,14 +443,13 @@ class Agent:
 
     def _summary(self, j: dict) -> dict:
         b = (j.get("builds") or [{}])[-1]
-        published = j.get("published")
-        age = (dt.date.today() - dt.date.fromisoformat(published)).days if published else None
+        key, ago = posted(j, dt.datetime.now())
         locs = [jobs.place(l) for l in j["locations"]]
         return {"id": j["id"], "title": j["title"], "company": j["company"],
                 "location": " / ".join(locs[:2]) + (f" +{len(locs) - 2}" if len(locs) > 2 else ""),
                 "type": j["category"], "score": j.get("prescore", 0),
                 "workplace": "" if j.get("workplace_hint") in (None, "Not stated") else j["workplace_hint"],
-                "sources": [j.get("source", "LinkedIn")] + j.get("also_on", []), "age": age,
+                "sources": [j.get("source", "LinkedIn")] + j.get("also_on", []), "posted": key, "ago": ago,
                 "status": j.get("status", ""), "new": j.get("first_seen") == self._store.data.get("last_check_at"),
                 "applied": bool(j.get("applied")), "hidden": bool(j.get("hidden")), "build": b.get("state")}
 
@@ -461,11 +478,14 @@ class Agent:
             old, dropped = self._store.data["jobs"], self._store.data.get("dropped", {})
             pool, _ = jobs.make_pool(items, dt.date.today())
             found = {i: j for i, j in pool["jobs"].items() if i not in dropped}
+            fetched = {str(x["jobId"]) for x in items if x.get("jobId")}
+            # listed jobs that came back but no longer pass the filters (a rule changed, or he applied) leave too
+            newly_dropped = {i: started for i in old if i in fetched and i not in pool["jobs"]}
             self._say(f"{len(found)} jobs after filtering. Checking the best ones on their sources…")
             ids = self._pick_checks(found, int(s["check_top"]))
             jobs.check(found, ids, progress=lambda n, t: self._say(f"Checking jobs on their sources: {n} of {t}"))
             carry_checks(found, old, set(ids))
-            words, applied, newly_dropped = keywords(), jobs.applied_sets(), {}
+            words, applied = keywords(), jobs.applied_sets()
             for i in [i for i, j in found.items() if j.get("checked")]:  # the full text is in: score again
                 rescore(found[i], words)
                 if jobs.drop_reason(found[i], applied):
@@ -602,6 +622,16 @@ def selftest():
     t = dt.datetime(2026, 10, 27, 9)
     assert window_days(None, t) == 7 and window_days("2026-10-27T07:00:00", t) == 2 and window_days("2026-10-01T09:00:00", t) == 7
     assert parse_json('Here:\n```json\n{"to_ask": [], "posting_language": "English"}\n```') == {"to_ask": [], "posting_language": "English"}
+    loc = lambda s: dt.datetime.fromisoformat(s).astimezone().replace(tzinfo=None)  # noqa: E731  this PC's time
+    at = loc("2026-10-27T12:00:00+01:00")
+    assert posted({"posted_at": "2026-10-27T09:10:00+01:00"}, at)[1] == "2 hours ago"
+    assert posted({"posted_at": "2026-10-27T10:00:00Z"}, at)[1] == "1 hour ago"
+    assert posted({"posted_at": "2026-10-27T11:59:30+01:00"}, at)[1] == "just now"
+    assert posted({"posted_at": "2026-10-24T11:00:00+01:00"}, at)[1] == "3 days ago"
+    assert posted({"published": "2026-10-26"}, dt.datetime(2026, 10, 27, 1))[1] == "yesterday"
+    assert posted({"posted_at": "2026-10-27"}, dt.datetime(2026, 10, 27, 1)) == ("2026-10-27T00:00:00", "today")
+    assert posted({}, at) == ("", "") and posted({"published": "soon"}, at) == ("", "")
+    assert posted({"posted_at": "2026-10-27T09:10:00+01:00"}, at)[0] > posted({"published": "2026-10-26"}, at)[0]
     assert affordable(["linkedin", "indeed", "stepstone"], {"linkedin_max": 400}, 0.2) == ["indeed", "stepstone"]
     assert affordable(["linkedin", "indeed"], {"linkedin_max": 400}, 5) == ["indeed", "linkedin"]
 

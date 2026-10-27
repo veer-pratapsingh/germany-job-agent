@@ -80,6 +80,8 @@ To use the app for someone else, change those names in `app/job_agent.py` and `.
 2. Optional: under **Settings**, paste your Apify API token and press **Test**. It shows how much of the month's credit is left.
    - Before each check, the app reads the remaining credit and skips any paid source whose run wouldn't fit.
 3. Filter by job type, source, "New only" or "Verified open", or search by title, company or city.
+   - Sort by **Best match first** or **Newest first**. The app remembers the choice.
+   - Each job shows how long ago it was posted: to the minute where the source gives a time (freehire, Arbeitnow, StepStone, Indeed and fresh LinkedIn jobs), otherwise to the day.
 4. Open a job, pick **Claude** or **Codex**, and press **Create CV + cover letter**.
 5. Answer the skill questions. The finished files open from the job's panel.
 

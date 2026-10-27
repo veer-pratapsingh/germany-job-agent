@@ -265,6 +265,7 @@ def to_job(x: dict, today: dt.date) -> dict:
     linkedin = f"https://www.linkedin.com/jobs/view/{x['jobId']}/" if src == "LinkedIn" else ""
     return {"id": str(x["jobId"]), "source": src, "title": title, "company": (x.get("companyName") or "").strip(),
             "locations": [x.get("location") or "Germany"], "published": published, "age": age,
+            "posted_at": x.get("publishedAt") or "",  # with the time of day where the source gives one
             "level": x.get("experienceLevel") or "", "contract": x.get("contractType") or "",
             "applicants": x.get("applicationsCount") or "", "apply_type": x.get("applyType") or "",
             "linkedin": linkedin, "url": linkedin or x.get("jobUrl") or "", "company_url": x.get("company_url"),
@@ -325,7 +326,7 @@ def drop_reason(j: dict, applied: list):
         return "3+ years of experience"
     if re.search(r"bachelorarbeit|bachelor'?s? thesis", t) and "master" not in t:
         return "bachelor thesis"
-    if re.search(r"\bph\.?\s?d\b|doktorand|postdoc", t):
+    if re.search(r"\bph\.?\s?d\b|doktorand|postdoc|doctoral|promotionsstelle", t):
         return "PhD or postdoc"
     if re.search(r"fachinformatiker|\(b\.?\s?(?:sc|a|eng)\.?\)", t):
         return "apprenticeship or bachelor programme"
@@ -568,7 +569,7 @@ def fetch_freehire(days: int, pages: int = 10) -> list:
                 found.setdefault(slug, {
                     "jobId": f"fh-{slug}", "source": SOURCES["freehire"], "slug": slug, "jobTitle": title,
                     "companyName": x.get("company") or "", "location": german_location(city) if city else "Germany",
-                    "publishedAt": (x.get("posted_at") or "")[:10],
+                    "publishedAt": x.get("posted_at") or "",
                     "experienceLevel": {"intern": "Internship", "junior": "Entry level",
                                         "middle": "Associate"}.get(e.get("seniority"), ""),
                     "contractType": e.get("employment_type") or "", "applyType": "EXTERNAL",
@@ -602,7 +603,7 @@ def fetch_arbeitnow(days: int, pages: int = 15) -> list:
                 "jobId": f"an-{x['slug']}", "source": SOURCES["arbeitnow"], "jobTitle": x.get("title") or "",
                 "companyName": x.get("company_name") or "",
                 "location": german_location(parts[0] if parts else "", parts[1] if len(parts) > 1 else ""),
-                "publishedAt": dt.datetime.fromtimestamp(x["created_at"]).date().isoformat(),
+                "publishedAt": dt.datetime.fromtimestamp(x["created_at"]).astimezone().isoformat(),
                 "experienceLevel": "Internship" if re.search(r"intern|praktik", types) else
                 "Mid-Senior level" if re.search(r"senior|lead", types) else "Associate" if re.search(r"\bmid\b", types)
                 else "Entry level" if re.search(r"entry|junior|graduate", types) else "",
@@ -658,6 +659,11 @@ def fetch_linkedin(cfg: dict, token: str, days: int, max_items: int, progress=No
     payload = {k: v for k, v in cfg.items() if k not in ("keyword", "locations", "startUrls", "publishedAt")}
     payload.update(startUrls=urls, maxItems=max_items)
     items = apify_run(ACTORS["linkedin"], payload, token, round(max_items * PRICE["linkedin"] + 0.05, 2), progress)
+    now = dt.datetime.now().astimezone()
+    for x in items:  # LinkedIn gives only a date, plus "3 hours ago" for fresh jobs: keep that time
+        m = re.search(r"(\d+)\s*(minute|hour)", x.get("postedTime") or "")
+        if m:
+            x["publishedAt"] = (now - dt.timedelta(**{m.group(2) + "s": int(m.group(1))})).isoformat(timespec="minutes")
     fields = LINKEDIN_FIELDS.split(",")
     return [{k: x.get(k) for k in fields} for x in items]
 
@@ -689,7 +695,7 @@ def indeed_item(x: dict, q: str):
             "companyName": (x.get("employer") or {}).get("name") or "",
             "location": ", ".join(p for p in (city, STATE_CODES.get(loc.get("admin1Code") or "")
                                               or CITY_STATES.get(city.lower(), ""), "Germany") if p),
-            "publishedAt": (x.get("datePublished") or x.get("dateOnIndeed") or "")[:10], "applyType": "EXTERNAL",
+            "publishedAt": x.get("datePublished") or x.get("dateOnIndeed") or "", "applyType": "EXTERNAL",
             "searchString": f"Indeed: {q}", "jobUrl": x.get("url") or "",
             "company_url": None if JOB_BOARDS.search(x.get("jobUrl") or "") else x.get("jobUrl"),
             "salaryInfo": [salary] if salary else [], "jobDescription": (x.get("description") or {}).get("text") or ""}
@@ -709,7 +715,7 @@ def stepstone_item(x: dict, q: str):
     return {"jobId": f"ss-{x['id']}", "source": SOURCES["stepstone"], "jobTitle": x.get("title") or "",
             "companyName": (x.get("company") or {}).get("name") or "",
             "location": german_location(((x.get("location") or {}).get("location") or "").split(",")[0]),
-            "publishedAt": (x.get("datePosted") or "")[:10], "applyType": "EXTERNAL",
+            "publishedAt": x.get("datePosted") or "", "applyType": "EXTERNAL",
             "searchString": f"StepStone: {q}", "jobUrl": x.get("url") or "",
             "company_url": next((u for u in links if not JOB_BOARDS.search(u) and "stepstone." not in u), None),
             "salaryInfo": [salary] if salary else [], "jobDescription": desc or x.get("textSnippet") or ""}
@@ -1115,6 +1121,9 @@ def selftest():
                              {"title": "Weitere Informationen",
                               "content": '<a href="https://circana.onlyfy.jobs/apply/1">online</a>'}]}, "q")
     assert ss["location"] == "Nürnberg, Bavaria, Germany" and ss["company_url"] == "https://circana.onlyfy.jobs/apply/1"
+    sj = to_job(ss, dt.date(2026, 10, 27))
+    assert sj["published"] == "2026-10-26" and sj["posted_at"] == "2026-10-26T00:26:39+01:00" and sj["age"] == 1
+    assert drop_reason({**sj, "title": "Doctoral Fellowship in Data Science"}, []) == "PhD or postdoc"
     assert workplace(ss["jobDescription"]) == "Hybrid (remote possible)" and sections(ss["jobDescription"])["needs"] == ["Python"]
     assert posting_language("Wir suchen dich für unser Team und die Entwicklung") == "German"
     job = {"title": "Werkstudent Data", "kw": 60, "age": 1, "category": "Werkstudent", "level": "", "min_years": None}
