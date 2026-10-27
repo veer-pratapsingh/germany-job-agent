@@ -1,0 +1,67 @@
+<h2 class="sr-only">Ranked job matches, each with a button that builds the CV and cover letter for that job</h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px">
+<input id="jb-q" placeholder="Filter by title, company or city" style="flex:1;min-width:200px">
+<select id="jb-t"><option value="">All types</option><option>Werkstudent</option><option>Internship</option><option>Thesis</option><option>Research</option><option>Trainee</option><option>Full-time</option></select>
+</div>
+<div id="jb-list"></div>
+<p id="jb-note" style="font-size:13px;color:var(--text-secondary,#5f5e5a);margin:8px 0 0"></p>
+<script>
+const JOBS = __JOBS__;
+const FILE = "__FILE__";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const badge = st => st === "Verified open"
+  ? "background:var(--bg-success,#eaf3de);color:var(--text-success,#27500a)"
+  : "background:var(--bg-warning,#faeeda);color:var(--text-warning,#633806)";
+const row = (k, v) => v ? `<div style="margin:2px 0"><span style="color:var(--text-secondary,#5f5e5a)">${k}:</span> ${esc(v)}</div>` : "";
+function render() {
+  const q = document.getElementById("jb-q").value.toLowerCase();
+  const t = document.getElementById("jb-t").value;
+  const shown = JOBS.filter(j => (!t || j.employment_type === t) &&
+    (!q || [j.title, j.company, j.location].join(" ").toLowerCase().includes(q)));
+  document.getElementById("jb-list").innerHTML = shown.map(j => `
+<div style="border:0.5px solid var(--border,#d3d1c7);border-radius:var(--radius,8px);padding:10px 12px;margin:0 0 8px">
+<div style="display:flex;gap:10px;align-items:flex-start">
+<span style="font-weight:500;min-width:30px">#${j.rank}</span>
+<div style="flex:1;min-width:0">
+<div style="font-weight:500">${esc(j.title)}</div>
+<div style="font-size:13px;color:var(--text-secondary,#5f5e5a)">${esc(j.company)} · ${esc(j.location)} · ${esc(j.employment_type)} · ${esc(j.workplace)} · posted ${esc(j.posted)}${j.source && j.source !== "LinkedIn" ? " · via " + esc(j.source) : ""}</div>
+</div>
+<span style="font-size:13px;font-weight:500;padding:2px 8px;border-radius:var(--radius,8px);background:var(--bg-accent,#e6f1fb);color:var(--text-accent,#0c447c)">${Math.round(j.score)}</span>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+<button data-build="${j.rank}">Build CV and cover letter ↗</button>
+<button data-more="${j.rank}">Details</button>
+${j.linkedin ? `<a href="${esc(j.linkedin)}" style="font-size:13px">LinkedIn</a>` : ""}
+${j.apply && j.apply !== j.linkedin ? `<a href="${esc(j.apply)}" style="font-size:13px">Apply</a>` : ""}
+<span style="font-size:12px;padding:2px 8px;border-radius:var(--radius,8px);${badge(j.status)}">${esc(j.status)}</span>
+</div>
+<div id="jb-d${j.rank}" hidden style="font-size:13px;margin-top:8px;line-height:1.6">
+${row("Why it matches", j.why)}${row("Missing skills", j.missing)}${row("Experience", j.experience)}${row("Language", j.language)}${row("Salary", j.salary)}${row("Eligibility", j.eligibility)}${row("Domain", j.domain)}
+</div>
+</div>`).join("") || `<p style="color:var(--text-secondary,#5f5e5a)">No jobs match this filter.</p>`;
+}
+document.getElementById("jb-q").addEventListener("input", render);
+document.getElementById("jb-t").addEventListener("change", render);
+document.getElementById("jb-list").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.more) {
+    const d = document.getElementById("jb-d" + b.dataset.more);
+    d.hidden = !d.hidden;
+    b.textContent = d.hidden ? "Details" : "Hide details";
+    return;
+  }
+  const j = JOBS.find(x => String(x.rank) === b.dataset.build);
+  const cmd = `/job-apply job ${j.rank} from ${FILE} (${j.title}, ${j.company})`;
+  const note = document.getElementById("jb-note");
+  if (typeof sendPrompt === "function") {
+    sendPrompt(cmd);
+    note.textContent = `Started: ${j.title}, ${j.company}`;
+  } else {
+    navigator.clipboard.writeText(cmd).then(
+      () => { note.textContent = "Copied. Paste it into Claude Code: " + cmd; },
+      () => { note.textContent = "Paste this into Claude Code: " + cmd; });
+  }
+});
+render();
+</script>

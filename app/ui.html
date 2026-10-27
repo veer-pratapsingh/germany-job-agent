@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Germany Job Agent</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --sunken: #eef0f3; --line: #e2e5ea; --line-strong: #cfd4dc;
+  --text: #16181d; --muted: #5b6270; --faint: #8a909c;
+  --accent: #2557d6; --accent-soft: #e8eefc; --accent-text: #1c46b0;
+  --good: #1f7a4d; --good-soft: #e3f4ea; --warn: #8a5a00; --warn-soft: #fbf0d9; --bad: #b42318; --bad-soft: #fde8e6;
+  --radius: 10px; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --panel: #181b21; --sunken: #20242b; --line: #2a2f38; --line-strong: #3a414d;
+    --text: #e8eaef; --muted: #a3a9b5; --faint: #767d8a;
+    --accent: #6d95ff; --accent-soft: #1d2a4a; --accent-text: #a9c0ff;
+    --good: #5fd39a; --good-soft: #15301f; --warn: #f0c060; --warn-soft: #33290f; --bad: #ff8b7e; --bad-soft: #3a1714;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font: 14px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 8px;
+  padding: 7px 14px; }
+button:hover { background: var(--sunken); }
+button:disabled { opacity: .55; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary:hover { filter: brightness(1.06); }
+button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+button.ghost:hover { background: var(--sunken); color: var(--text); }
+input[type=text], input[type=password], input[type=number], select { border: 1px solid var(--line-strong);
+  background: var(--panel); border-radius: 8px; padding: 7px 10px; }
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: var(--panel);
+  border-bottom: 1px solid var(--line); }
+.logo { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: #fff; display: grid;
+  place-items: center; font-weight: 700; letter-spacing: .5px; }
+.brand h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.brand p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.spacer { flex: 1; }
+#run-status { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; max-width: 520px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--line-strong); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--line);
+  background: var(--bg); flex-wrap: wrap; }
+.toolbar input[type=text] { width: 280px; }
+.chip-toggle { border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+.chip-toggle[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+#count { color: var(--muted); font-size: 13px; margin-left: auto; }
+main { flex: 1; display: grid; grid-template-columns: minmax(340px, 440px) 1fr; min-height: 0; }
+#list { overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--line); padding: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 12px;
+  margin-bottom: 8px; display: grid; grid-template-columns: 44px 1fr; gap: 10px; cursor: pointer; box-shadow: var(--shadow); }
+.card:hover { border-color: var(--line-strong); }
+.card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.score { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; font-weight: 700;
+  font-size: 15px; background: var(--sunken); color: var(--muted); }
+.score.hi { background: var(--good-soft); color: var(--good); }
+.score.mid { background: var(--accent-soft); color: var(--accent-text); }
+.card h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; align-items: center; }
+.tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--sunken); color: var(--muted);
+  white-space: nowrap; }
+.tag.new { background: var(--accent); color: #fff; font-weight: 600; }
+.tag.good { background: var(--good-soft); color: var(--good); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.acc { background: var(--accent-soft); color: var(--accent-text); }
+.age { margin-left: auto; color: var(--faint); font-size: 12px; }
+#detail { overflow-y: auto; padding: 22px 28px 40px; }
+.empty { color: var(--muted); text-align: center; margin-top: 18vh; }
+.empty h2 { color: var(--text); font-weight: 600; font-size: 18px; margin-bottom: 6px; }
+.d-title { font-size: 21px; font-weight: 650; margin: 0 0 4px; line-height: 1.3; }
+.d-sub { color: var(--muted); margin: 0 0 10px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 18px; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px;
+  margin-bottom: 14px; box-shadow: var(--shadow); }
+.box h4 { margin: 0 0 10px; font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); }
+.engine { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; }
+.engine button { border: 0; border-radius: 0; padding: 7px 16px; background: var(--panel); }
+.engine button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.msg { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px; white-space: pre-wrap; }
+.msg.bad { background: var(--bad-soft); color: var(--bad); }
+.msg.good { background: var(--good-soft); color: var(--good); }
+.q { display: grid; grid-template-columns: 20px 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.q:last-of-type { border-bottom: 0; }
+.q input { margin-top: 3px; }
+.q b { font-weight: 600; }
+.q small { color: var(--muted); display: block; }
+.files { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 22px; }
+.grid div { font-size: 13px; }
+.grid span { display: block; color: var(--faint); font-size: 12px; }
+.prose { white-space: pre-wrap; font-size: 13.5px; line-height: 1.6; }
+details summary { cursor: pointer; color: var(--accent-text); font-weight: 600; font-size: 13px; }
+.bottom { display: flex; gap: 8px; margin-top: 6px; }
+footer { border-top: 1px solid var(--line); background: var(--panel); padding: 7px 20px; display: flex; gap: 8px;
+  align-items: center; min-height: 40px; overflow-x: auto; }
+footer .label { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.task { display: inline-flex; gap: 7px; align-items: center; border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 11px; font-size: 12.5px; white-space: nowrap; cursor: pointer; background: var(--bg); }
+.task.waiting { border-color: var(--warn); color: var(--warn); }
+.task.failed { border-color: var(--bad); color: var(--bad); }
+.task.done { border-color: var(--good); color: var(--good); }
+dialog { border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(560px, 92vw); background: var(--panel);
+  color: var(--text); }
+dialog::backdrop { background: rgba(10, 12, 16, .45); }
+.dlg { padding: 20px 22px; }
+.dlg h2 { margin: 0 0 14px; font-size: 17px; }
+.field { display: grid; align-content: start; gap: 4px; margin-bottom: 12px; }
+.field label { font-size: 13px; font-weight: 600; }
+.field small { color: var(--muted); font-size: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 13.5px; margin: 4px 0; }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo" aria-hidden="true">GJ</div>
+  <div class="brand"><h1>Germany Job Agent</h1><p id="last-check">Not checked yet</p></div>
+  <div class="spacer"></div>
+  <div id="run-status" role="status"></div>
+  <button class="primary" id="btn-check">Check for new jobs</button>
+  <button id="btn-settings">Settings</button>
+</header>
+<div class="toolbar">
+  <input type="text" id="q" placeholder="Search title, company or city" aria-label="Search jobs">
+  <select id="f-type" aria-label="Job type">
+    <option value="">All types</option><option>Werkstudent</option><option>Internship</option><option>Thesis</option>
+    <option>Research</option><option>Trainee</option><option>Full-time</option>
+  </select>
+  <select id="f-source" aria-label="Source"><option value="">All sources</option></select>
+  <button class="chip-toggle" id="f-new" aria-pressed="false">New only</button>
+  <button class="chip-toggle" id="f-open" aria-pressed="false">Verified open</button>
+  <button class="chip-toggle" id="f-applied" aria-pressed="false">Show applied</button>
+  <span id="count"></span>
+</div>
+<main>
+  <section id="list" aria-label="Jobs"></section>
+  <section id="detail" aria-live="polite">
+    <div class="empty"><h2>Your job board</h2><p>Click <b>Check for new jobs</b> to search every source, then pick a job.</p></div>
+  </section>
+</main>
+<footer id="tasks"><span class="label">No CVs being built</span></footer>
+
+<dialog id="settings">
+  <form method="dialog" class="dlg" id="settings-form">
+    <h2>Settings</h2>
+    <div class="field">
+      <label for="s-token">Apify API token</label>
+      <div class="row"><input type="password" id="s-token" style="flex:1" placeholder="Paste your token" autocomplete="off">
+        <button type="button" id="s-test">Test</button></div>
+      <small id="s-token-note">Needed for LinkedIn, Indeed and StepStone. Find it in Apify Console under Settings → API &amp; Integrations. It's saved only on this PC.</small>
+    </div>
+    <div class="field">
+      <label>Paid sources (through Apify)</label>
+      <label class="check"><input type="checkbox" id="s-linkedin"> LinkedIn: about $0.28 for 400 jobs</label>
+      <label class="check"><input type="checkbox" id="s-indeed"> Indeed: about $0.04 per check</label>
+      <label class="check"><input type="checkbox" id="s-stepstone"> StepStone: about $0.15 per check</label>
+      <small>The Bundesagentur für Arbeit, freehire and Arbeitnow are always searched and cost nothing.</small>
+    </div>
+    <div class="two">
+      <div class="field"><label for="s-limax">LinkedIn jobs per check</label><input type="number" id="s-limax" min="50" max="3000" step="50"></div>
+      <div class="field"><label for="s-top">Jobs checked per run</label><input type="number" id="s-top" min="10" max="200" step="10"><small>Opened on their source to confirm they're still open</small></div>
+    </div>
+    <div class="two">
+      <div class="field"><label for="s-cmodel">Claude model</label>
+        <select id="s-cmodel"><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="haiku">Haiku</option></select></div>
+      <div class="field"><label for="s-ceffort">Claude effort</label>
+        <select id="s-ceffort"><option>low</option><option>medium</option><option>high</option></select></div>
+    </div>
+    <div class="two">
+      <div class="field"><label for="s-xmodel">Codex model</label><input type="text" id="s-xmodel" placeholder="Default from Codex config"></div>
+      <div class="field"><label for="s-xeffort">Codex effort</label>
+        <select id="s-xeffort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></div>
+    </div>
+    <div class="field"><label for="s-par">CVs built at the same time</label><input type="number" id="s-par" min="1" max="6" style="width:100px">
+      <small>Takes effect when you restart the app</small></div>
+  </form>
+  <div class="dlg-foot"><button id="s-cancel">Cancel</button><button class="primary" id="s-save">Save</button></div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let api = null, jobsList = [], selected = null, version = -1, engine = "claude", busyRefresh = false;
+const filters = {q: "", type: "", source: "", newOnly: false, openOnly: false, showApplied: false};
+
+const STATUS = {"Verified open": ["good", "Open"], "Listed today": ["acc", "Listed today"], "Unconfirmed": ["", "Unconfirmed"], "Closed": ["bad", "Closed"]};
+const BUILD = {analyzing: ["acc", "Reading posting…"], questions: ["warn", "Needs your answers"], building: ["acc", "Writing CV…"],
+               done: ["good", "CV ready"], failed: ["bad", "Build failed"]};
+const ENGINE = {claude: "Claude", codex: "Codex"};
+
+function scoreClass(s) { return s >= 75 ? "hi" : s >= 55 ? "mid" : ""; }
+function ageText(d) { return d == null || d > 60 ? "" : d === 0 ? "today" : d === 1 ? "1 day ago" : d + " days ago"; }
+function statusTag(st) { const [c, t] = STATUS[st] || ["", st || "Not checked"]; return `<span class="tag ${c}">${esc(t)}</span>`; }
+
+function visible() {
+  const q = filters.q.toLowerCase();
+  return jobsList.filter(j => (filters.showApplied || !j.applied) && !j.hidden && j.status !== "Closed" &&
+    (!filters.type || j.type === filters.type) && (!filters.source || j.sources.includes(filters.source)) &&
+    (!filters.newOnly || j.new) && (!filters.openOnly || j.status === "Verified open") &&
+    (!q || (j.title + " " + j.company + " " + j.location).toLowerCase().includes(q)));
+}
+
+function renderList() {
+  const shown = visible();
+  $("#count").textContent = `${shown.length} of ${jobsList.length} jobs`;
+  if (!jobsList.length) { $("#list").innerHTML = `<p class="empty">No jobs yet.</p>`; return; }
+  $("#list").innerHTML = shown.map(j => {
+    const b = j.build ? BUILD[j.build] : null;
+    return `<article class="card${j.id === selected ? " active" : ""}" data-id="${esc(j.id)}" tabindex="0">
+      <div class="score ${scoreClass(j.score)}" title="Quick match score">${j.score}</div>
+      <div><h3>${esc(j.title)}</h3><div class="sub">${esc(j.company)} · ${esc(j.location)}</div>
+        <div class="tags">${j.new ? '<span class="tag new">NEW</span>' : ""}<span class="tag">${esc(j.type)}</span>
+          ${j.workplace && j.workplace !== "Not stated" ? `<span class="tag">${esc(j.workplace)}</span>` : ""}
+          <span class="tag">${esc(j.sources[0])}${j.sources.length > 1 ? " +" + (j.sources.length - 1) : ""}</span>
+          ${b ? `<span class="tag ${b[0]}">${b[1]}</span>` : ""}${j.applied ? '<span class="tag good">Applied</span>' : ""}
+          <span class="age">${ageText(j.age)}</span></div></div></article>`;
+  }).join("") || `<p class="empty">No jobs match these filters.</p>`;
+}
+
+function fact(label, value) { return value ? `<div><span>${label}</span>${esc(value)}</div>` : ""; }
+
+function buildBox(j) {
+  const b = (j.builds || []).slice(-1)[0];
+  const other = b && b.engine === "claude" ? "codex" : "claude";
+  const picker = `<div class="engine" role="group" aria-label="Engine">
+      ${Object.entries(ENGINE).map(([k, v]) => `<button type="button" data-engine="${k}" aria-pressed="${engine === k}">${v}</button>`).join("")}</div>`;
+  let body = "";
+  if (!b || b.state === "done" || b.state === "failed") {
+    body = `<div class="row">${picker}<button class="primary" data-act="create">${b ? "Create another version" : "Create CV + cover letter"}</button></div>
+      <p class="note">It reads the posting, asks you about any skills your profile doesn't show yet, then writes the CV, cover letter and prep plan.</p>`;
+  }
+  if (b && b.state === "analyzing") body = `<div class="row"><div class="spinner"></div>${ENGINE[b.engine]} is reading the posting and your profile…</div>`;
+  if (b && b.state === "building") body = `<div class="row"><div class="spinner"></div>${ENGINE[b.engine]} is writing and checking your CV and cover letter. This takes 5–10 minutes; you can keep browsing.</div>`;
+  if (b && b.state === "questions") {
+    const qs = b.questions.to_ask || [];
+    body = `<p style="margin:0 0 6px">${qs.length ? "Before writing, tick the skills you have actually used (in a job, a course or a project), well enough to answer interview questions on them:" : "No new skills to confirm."}</p>
+      ${qs.map((q, n) => `<label class="q"><input type="checkbox" data-skill="${n}"><span><b>${esc(q.skill)}</b> · ${esc(q.priority)}<small>${esc(q.why)}</small></span></label>`).join("")}
+      ${b.questions.posting_language === "German" ? `<div class="row" style="margin-top:10px"><span>The posting is in German. Write in:</span>
+        <label class="check"><input type="radio" name="lang" value="English" checked> English</label>
+        <label class="check"><input type="radio" name="lang" value="German"> German</label></div>` : ""}
+      ${b.questions.fit_note ? `<p class="note">${esc(b.questions.fit_note)}</p>` : ""}
+      <div class="row" style="margin-top:12px"><button class="primary" data-act="answer">Build CV + cover letter</button>
+        <span class="note" style="margin:0">Unticked skills stay off your CV and go into the study plan.</span></div>`;
+  }
+  if (b && b.state === "done") {
+    body += `<div class="msg good">Ready, written by ${ENGINE[b.engine]}.</div>${b.message ? `<div class="msg bad">${esc(b.message)}</div>` : ""}<div class="files">${(b.files || []).map(f =>
+      `<button data-open="${esc(f.path)}">${esc(f.label)}</button>`).join("")}<button class="ghost" data-open="${esc(b.folder)}">Open folder</button></div>`;
+  }
+  if (b && b.state === "failed") {
+    body += `<div class="msg bad">${ENGINE[b.engine]} stopped: ${esc(b.message || "unknown error")}</div>
+      <div class="files"><button data-act="retry" data-engine-to="${other}">Retry with ${ENGINE[other]}</button>
+      ${b.log ? `<button class="ghost" data-open="${esc(b.log)}">Open log</button>` : ""}</div>`;
+  }
+  return `<div class="box"><h4>Application</h4>${body}</div>`;
+}
+
+function renderDetail(j) {
+  if (!j) { $("#detail").innerHTML = `<div class="empty"><h2>Pick a job</h2><p>Its posting, links and the CV builder appear here.</p></div>`; return; }
+  const s = j.snippets || {};
+  const join = v => Array.isArray(v) ? v.join(" · ") : v;
+  $("#detail").innerHTML = `
+    <h2 class="d-title">${esc(j.title)}</h2>
+    <p class="d-sub">${esc(j.company)} · ${esc(j.location)}</p>
+    <div class="tags">${j.new ? '<span class="tag new">NEW</span>' : ""}<span class="tag">${esc(j.type)}</span>
+      ${j.workplace ? `<span class="tag">${esc(j.workplace)}</span>` : ""}${statusTag(j.status)}
+      <span class="tag">${esc(j.sources.join(", "))}</span><span class="tag">posted ${esc(j.published || "?")}</span></div>
+    <div class="actions">
+      <button data-url="${esc(j.url)}">Open job posting ↗</button>
+      ${j.apply && j.apply !== j.url ? `<button data-url="${esc(j.apply)}">Apply on company site ↗</button>` : ""}
+      <button class="ghost" data-copy="${esc(j.apply || j.url)}">Copy link</button>
+    </div>
+    ${buildBox(j)}
+    <div class="box"><h4>At a glance</h4><div class="grid">
+      ${fact("Match score", j.score + " / 100 (quick check)")}${fact("Experience", join(s.experience))}${fact("Language", join(s.language))}
+      ${fact("Hours", join(s.hours))}${fact("Start and duration", join(s.start))}${fact("Salary", join(s.salary))}
+      ${fact("Enrolment", join(s.enrolment))}${fact("Apply route", j.apply_route)}${fact("Checked", j.checked)}</div></div>
+    ${s.needs ? `<div class="box"><h4>What they want</h4><div class="prose">${esc(s.needs.replaceAll(" • ", "\n• "))}</div></div>` : ""}
+    ${s.tasks ? `<div class="box"><h4>What you'd do</h4><div class="prose">${esc(s.tasks.replaceAll(" • ", "\n• "))}</div></div>` : ""}
+    <div class="box"><details${s.needs ? "" : " open"}><summary>Full posting</summary><div class="prose" style="margin-top:10px">${esc(j.description || "The full text loads when this job is checked on its source.")}</div></details></div>
+    <div class="bottom"><button data-flag="applied">${j.applied ? "Mark as not applied" : "Mark as applied"}</button>
+      <button class="ghost" data-flag="hidden">Hide this job</button></div>`;
+}
+
+async function loadJobs() {
+  jobsList = await api.list_jobs();
+  const sources = [...new Set(jobsList.flatMap(j => j.sources))].sort();
+  const cur = $("#f-source").value;
+  $("#f-source").innerHTML = `<option value="">All sources</option>` + sources.map(s => `<option${s === cur ? " selected" : ""}>${esc(s)}</option>`).join("");
+  renderList();
+}
+async function select(id) {
+  selected = id; renderList();
+  renderDetail(id ? await api.get_job(id) : null);
+}
+
+async function poll() {
+  const st = await api.state();
+  busyRefresh = !!(st.refresh && st.refresh.running);
+  $("#btn-check").disabled = busyRefresh;
+  $("#run-status").innerHTML = st.refresh && st.refresh.message ? `${busyRefresh ? '<div class="spinner"></div>' : ""}<span>${esc(st.refresh.message)}</span>` : "";
+  $("#last-check").textContent = st.last_check ? `Last check ${st.last_check}${st.new_count ? " · " + st.new_count + " new" : ""}` : "Not checked yet";
+  $("#tasks").innerHTML = st.tasks.length ? `<span class="label">Builds</span>` + st.tasks.map(t =>
+    `<span class="task ${t.state === "questions" ? "waiting" : t.state}" data-id="${esc(t.job)}">${["analyzing", "building"].includes(t.state) ? '<div class="spinner"></div>' : ""}${esc(t.company)} · ${ENGINE[t.engine]} · ${BUILD[t.state][1]}${t.elapsed ? " · " + t.elapsed : ""}</span>`).join("")
+    : `<span class="label">No CVs being built</span>`;
+  if (st.version !== version) {
+    version = st.version;
+    await loadJobs();
+    if (selected) renderDetail(await api.get_job(selected));
+  }
+}
+
+function bind() {
+  $("#list").addEventListener("click", e => { const c = e.target.closest(".card"); if (c) select(c.dataset.id); });
+  $("#list").addEventListener("keydown", e => { const c = e.target.closest(".card"); if (c && e.key === "Enter") select(c.dataset.id); });
+  $("#tasks").addEventListener("click", e => { const t = e.target.closest(".task"); if (t) select(t.dataset.id); });
+  $("#q").addEventListener("input", e => { filters.q = e.target.value; renderList(); });
+  $("#f-type").addEventListener("change", e => { filters.type = e.target.value; renderList(); });
+  $("#f-source").addEventListener("change", e => { filters.source = e.target.value; renderList(); });
+  for (const [id, key] of [["#f-new", "newOnly"], ["#f-open", "openOnly"], ["#f-applied", "showApplied"]]) {
+    $(id).addEventListener("click", e => { filters[key] = !filters[key]; e.target.setAttribute("aria-pressed", filters[key]); renderList(); });
+  }
+  $("#btn-check").addEventListener("click", async () => { await api.check_jobs(); poll(); });
+  $("#detail").addEventListener("click", async e => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.engine) { engine = b.dataset.engine; renderDetail(await api.get_job(selected)); return; }
+    if (b.dataset.url) return api.open_url(b.dataset.url);
+    if (b.dataset.open) return api.open_path(b.dataset.open);
+    if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; return; }
+    if (b.dataset.flag) { await api.toggle(selected, b.dataset.flag); if (b.dataset.flag === "hidden") select(null); return poll(); }
+    if (b.dataset.act === "create") { b.disabled = true; await api.create(selected, engine); return poll(); }
+    if (b.dataset.act === "retry") { engine = b.dataset.engineTo; b.disabled = true; await api.create(selected, engine); return poll(); }
+    if (b.dataset.act === "answer") {
+      const job = await api.get_job(selected), qs = job.builds.slice(-1)[0].questions.to_ask || [];
+      const have = [], lack = [];
+      qs.forEach((q, n) => ($(`[data-skill="${n}"]`).checked ? have : lack).push(q.skill));
+      const lang = (document.querySelector('input[name="lang"]:checked') || {}).value || "English";
+      b.disabled = true; await api.answer(selected, have, lack, lang); return poll();
+    }
+  });
+  $("#btn-settings").addEventListener("click", openSettings);
+  $("#s-cancel").addEventListener("click", () => $("#settings").close());
+  $("#s-save").addEventListener("click", saveSettings);
+  $("#s-test").addEventListener("click", async () => {
+    $("#s-token-note").textContent = "Checking…";
+    $("#s-token-note").textContent = await api.test_apify($("#s-token").value);
+  });
+}
+
+async function openSettings() {
+  const s = await api.get_settings();
+  $("#s-token").value = ""; $("#s-token").placeholder = s.token_set ? "Saved (paste a new one to replace it)" : "Paste your token";
+  $("#s-linkedin").checked = s.linkedin; $("#s-indeed").checked = s.indeed; $("#s-stepstone").checked = s.stepstone;
+  $("#s-limax").value = s.linkedin_max; $("#s-top").value = s.check_top; $("#s-par").value = s.parallel;
+  $("#s-cmodel").value = s.claude_model; $("#s-ceffort").value = s.claude_effort;
+  $("#s-xmodel").value = s.codex_model; $("#s-xeffort").value = s.codex_effort;
+  $("#settings").showModal();
+}
+async function saveSettings() {
+  await api.save_settings({apify_token: $("#s-token").value.trim(), linkedin: $("#s-linkedin").checked,
+    indeed: $("#s-indeed").checked, stepstone: $("#s-stepstone").checked, linkedin_max: +$("#s-limax").value || 400,
+    check_top: +$("#s-top").value || 60, parallel: +$("#s-par").value || 3, claude_model: $("#s-cmodel").value,
+    claude_effort: $("#s-ceffort").value, codex_model: $("#s-xmodel").value.trim(), codex_effort: $("#s-xeffort").value});
+  $("#settings").close();
+}
+
+window.addEventListener("pywebviewready", async () => {
+  api = window.pywebview.api;
+  bind();
+  await poll();
+  setInterval(poll, 1500);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Only the app is published. Everything personal (profile, CVs, letters, prep plans, job data,
+# applications) stays on this PC, so this file lists what is allowed rather than what is not.
+/*
+!/.gitignore
+!/README.md
+!/CLAUDE.md
+!/AGENTS.md
+!/app/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+__pycache__/

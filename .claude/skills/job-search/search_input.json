@@ -1,0 +1,63 @@
+{
+  "keyword": [
+    "Werkstudent Softwareentwicklung", "Werkstudent Data Science", "Werkstudent Data Engineering", "Werkstudent KI",
+    "Werkstudent Machine Learning", "Werkstudent GenAI", "Werkstudent Python", "Werkstudent Cloud", "Werkstudent DevOps",
+    "Werkstudent IT", "Werkstudent Business Intelligence", "Werkstudent Datenanalyse", "Werkstudent Digitalisierung",
+    "Werkstudent IT-Sicherheit", "Werkstudent Embedded Software", "Werkstudent Robotik", "Werkstudent SAP",
+    "Werkstudent Testautomatisierung", "Working Student Software Engineering", "Working Student Data",
+    "Working Student AI", "Working Student Cloud", "Praktikum Informatik", "Praktikum Data Science",
+    "Praktikum Künstliche Intelligenz", "Praktikum Softwareentwicklung", "Internship Machine Learning",
+    "Internship Data Science", "Internship Software Engineering", "Masterarbeit Informatik",
+    "Masterarbeit Künstliche Intelligenz", "Masterarbeit Machine Learning", "Masterarbeit Data Science",
+    "Master Thesis AI", "Master Thesis Software", "Abschlussarbeit Data", "Studentische Hilfskraft Informatik",
+    "Wissenschaftliche Hilfskraft Informatik", "Student Research Assistant Machine Learning", "Research Assistant AI",
+    "Junior Data Scientist", "Junior Data Analyst", "Junior Data Engineer", "Junior Software Engineer",
+    "Junior Softwareentwickler", "Junior AI Engineer", "Junior Machine Learning Engineer", "Junior Cloud Engineer",
+    "Junior DevOps Engineer", "Junior Python Developer", "Junior Full Stack Developer", "Junior IT Consultant",
+    "Junior Business Intelligence", "Junior QA Engineer", "Junior IT Security Analyst", "Graduate Software Engineer",
+    "Berufseinsteiger Informatik", "Trainee IT", "Trainee Data Analytics", "Graduate Program Technology"
+  ],
+  "locations": ["Germany"],
+  "startUrls": [
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Saxony-Anhalt%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Saxony%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Thuringia%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Brandenburg%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Mecklenburg-West%20Pomerania%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Schleswig-Holstein%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Lower%20Saxony%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Saarland%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"},
+    {"url": "https://www.linkedin.com/jobs/search/?keywords=Software%20OR%20Data%20OR%20KI%20OR%20Informatik&location=Rhineland-Palatinate%2C%20Germany&f_TPR=r604800&f_E=1%2C2%2C3"}
+  ],
+  "publishedAt": "r604800",
+  "maxItems": 1500,
+  "saveOnlyUniqueItems": true,
+  "excludeRecruitingAgencies": true,
+  "jobTitleExclude": [
+    "Senior", "Sr", "Lead", "Principal", "Head", "Director", "Staff", "Teamleiter", "Teamleiterin", "Teamleitung",
+    "Leiter", "Leiterin", "Leitung", "Chief", "Professor", "Professur", "Postdoc", "Doktorand", "Doktorandin", "PhD",
+    "Ausbildung", "Azubi", "Auszubildender", "Auszubildende", "Duales", "Schülerpraktikum", "Expert", "Experte"
+  ],
+  "resumeKeywords": [
+    {"keyword": "Python"},
+    {"keyword": "SQL", "aliases": ["PostgreSQL", "SQLite"]},
+    {"keyword": "Machine Learning", "aliases": ["ML", "maschinelles Lernen", "scikit-learn"]},
+    {"keyword": "AI", "aliases": ["KI", "künstliche Intelligenz", "artificial intelligence"]},
+    {"keyword": "LLM", "aliases": ["GenAI", "generative AI", "generative KI", "RAG", "LangChain", "LangGraph", "large language model"]},
+    {"keyword": "Deep Learning", "aliases": ["PyTorch", "TensorFlow", "neural network", "neuronale Netze"]},
+    {"keyword": "Data Analysis", "aliases": ["Datenanalyse", "data analytics", "Statistik", "statistics"]},
+    {"keyword": "Power BI", "aliases": ["Tableau", "Business Intelligence", "Dashboard", "Dashboards"]},
+    {"keyword": "ETL", "aliases": ["data pipeline", "data pipelines", "Datenpipeline", "data engineering"]},
+    {"keyword": "Cloud", "aliases": ["AWS", "Azure", "GCP", "Google Cloud"]},
+    {"keyword": "Docker", "aliases": ["Kubernetes", "container"]},
+    {"keyword": "CI/CD", "aliases": ["DevOps", "GitLab", "Jenkins", "GitHub Actions"]},
+    {"keyword": "API", "aliases": ["REST", "FastAPI", "REST API"]},
+    {"keyword": "JavaScript", "aliases": ["TypeScript", "React", "Node.js", "HTML"]},
+    {"keyword": "Git", "aliases": ["GitHub"]},
+    {"keyword": "MLOps", "aliases": ["MLflow"]},
+    {"keyword": "IoT", "aliases": ["MQTT", "Raspberry Pi", "sensor"]},
+    {"keyword": "Excel", "aliases": ["VBA", "Power Query"]},
+    {"keyword": "Linux"},
+    {"keyword": "Terraform", "aliases": ["Infrastructure as Code", "Ansible"]}
+  ]
+}
