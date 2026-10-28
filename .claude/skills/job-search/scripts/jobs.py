@@ -484,7 +484,9 @@ def http_json(url: str, headers: dict = None, timeout: int = 25) -> tuple:
     for k, v in (headers or {}).items():
         args += ["-H", f"{k}: {v}"]
     try:
-        out = subprocess.run(args + [url], capture_output=True, timeout=timeout + 5).stdout.decode("utf-8", "replace")
+        # no console window per request when the desktop app (pythonw, which has no console) calls this
+        out = subprocess.run(args + [url], capture_output=True, timeout=timeout + 5,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.decode("utf-8", "replace")
         body, _, code = out.rpartition("\n")
         return int(code), (json.loads(body) if code.startswith("2") else None)
     except (OSError, ValueError, subprocess.TimeoutExpired):
