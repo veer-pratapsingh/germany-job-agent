@@ -58,7 +58,11 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; back
 main { flex: 1; display: grid; grid-template-columns: minmax(340px, 440px) 1fr; min-height: 0; }
 #list { overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--line); padding: 10px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 12px;
-  margin-bottom: 8px; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; cursor: pointer; box-shadow: var(--shadow); }
+  margin-bottom: 8px; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; cursor: pointer; box-shadow: var(--shadow);
+  content-visibility: auto; contain-intrinsic-size: auto 118px; }  /* cards off screen aren't drawn: smooth scrolling */
+.more { width: 100%; }
+.toolbar[data-view=applied] .jobs-only { display: none; }
+.d-en { font-weight: 600; margin: 0 0 8px; }
 .card:hover { border-color: var(--line-strong); }
 .card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .score { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; font-weight: 700;
@@ -138,17 +142,20 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
   <button class="primary" id="btn-check">Check for new jobs</button>
   <button id="btn-settings">Settings</button>
 </header>
-<div class="toolbar">
+<div class="toolbar" data-view="jobs">
+  <div class="engine views" role="group" aria-label="View">
+    <button type="button" data-view="jobs" aria-pressed="true">Jobs</button>
+    <button type="button" data-view="applied" aria-pressed="false">Applied <span id="applied-count"></span></button>
+  </div>
   <input type="text" id="q" placeholder="Search title, company or city" aria-label="Search jobs">
   <select id="f-type" aria-label="Job type">
     <option value="">All types</option><option>Werkstudent</option><option>Internship</option><option>Thesis</option>
     <option>Research</option><option>Trainee</option><option>Full-time</option>
   </select>
   <select id="f-source" aria-label="Source"><option value="">All sources</option></select>
-  <select id="f-sort" aria-label="Sort order"><option value="best">Best match first</option><option value="new">Newest first</option></select>
-  <button class="chip-toggle" id="f-new" aria-pressed="false">New only</button>
-  <button class="chip-toggle" id="f-open" aria-pressed="false">Verified open</button>
-  <button class="chip-toggle" id="f-applied" aria-pressed="false">Show applied</button>
+  <select id="f-sort" class="jobs-only" aria-label="Sort order"><option value="best">Best match first</option><option value="new">Newest first</option></select>
+  <button class="chip-toggle jobs-only" id="f-new" aria-pressed="false">New only</button>
+  <button class="chip-toggle jobs-only" id="f-open" aria-pressed="false">Verified open</button>
   <span id="count"></span>
 </div>
 <main>
@@ -199,8 +206,10 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let api = null, jobsList = [], selected = null, version = -1, engine = "claude", busyRefresh = false;
-const filters = {q: "", type: "", source: "", sort: "best", newOnly: false, openOnly: false, showApplied: false};
+let api = null, jobsList = [], selected = null, version = -1, engine = "claude", busyRefresh = false, detailBusy = false;
+const filters = {view: "jobs", q: "", type: "", source: "", sort: "best", newOnly: false, openOnly: false};
+const PAGE = 200;  // cards drawn at a time; thousands of cards made scrolling slow
+let limit = PAGE;
 
 const STATUS = {"Verified open": ["good", "Open"], "Listed today": ["acc", "Listed today"], "Unconfirmed": ["", "Unconfirmed"], "Closed": ["bad", "Closed"]};
 const BUILD = {analyzing: ["acc", "Reading posting…"], questions: ["warn", "Needs your answers"], building: ["acc", "Writing CV…"],
@@ -211,20 +220,25 @@ function scoreClass(s) { return s >= 75 ? "hi" : s >= 55 ? "mid" : ""; }
 function statusTag(st) { const [c, t] = STATUS[st] || ["", st || "Not checked"]; return `<span class="tag ${c}">${esc(t)}</span>`; }
 
 function visible() {
-  const q = filters.q.toLowerCase();
-  const shown = jobsList.filter(j => (filters.showApplied || !j.applied) && !j.hidden && j.status !== "Closed" &&
+  const q = filters.q.toLowerCase(), applied = filters.view === "applied";
+  const shown = jobsList.filter(j => (applied ? j.applied : !j.applied && !j.hidden && j.status !== "Closed" &&
+      (!filters.newOnly || j.new) && (!filters.openOnly || j.status === "Verified open")) &&
     (!filters.type || j.type === filters.type) && (!filters.source || j.sources.includes(filters.source)) &&
-    (!filters.newOnly || j.new) && (!filters.openOnly || j.status === "Verified open") &&
     (!q || (j.title + " " + j.company + " " + j.location).toLowerCase().includes(q)));
+  if (applied) return shown.sort((a, b) => (b.applied_at || "").localeCompare(a.applied_at || ""));
   // the list arrives best match first; the sort is stable, so jobs with the same posting time keep that order
   return filters.sort === "new" ? shown.sort((a, b) => (b.posted || "").localeCompare(a.posted || "")) : shown;
 }
 
+function refilter() { limit = PAGE; renderList(); $("#list").scrollTop = 0; }
+
 function renderList() {
-  const shown = visible();
-  $("#count").textContent = `${shown.length} of ${jobsList.length} jobs`;
+  const shown = visible(), applied = filters.view === "applied";
+  $("#applied-count").textContent = jobsList.filter(j => j.applied).length || "";
+  $("#count").textContent = applied ? `${shown.length} applied` : `${shown.length} of ${jobsList.length} jobs`;
   if (!jobsList.length) { $("#list").innerHTML = `<p class="empty">No jobs yet.</p>`; return; }
-  $("#list").innerHTML = shown.map(j => {
+  const more = shown.length - limit;
+  $("#list").innerHTML = shown.slice(0, limit).map(j => {
     const b = j.build ? BUILD[j.build] : null;
     return `<article class="card${j.id === selected ? " active" : ""}" data-id="${esc(j.id)}" tabindex="0">
       <div class="score ${scoreClass(j.score)}" title="Quick match score">${j.score}</div>
@@ -232,9 +246,10 @@ function renderList() {
         <div class="tags">${j.new ? '<span class="tag new">NEW</span>' : ""}<span class="tag">${esc(j.type)}</span>
           ${j.workplace && j.workplace !== "Not stated" ? `<span class="tag">${esc(j.workplace)}</span>` : ""}
           <span class="tag">${esc(j.sources[0])}${j.sources.length > 1 ? " +" + (j.sources.length - 1) : ""}</span>
-          ${b ? `<span class="tag ${b[0]}">${b[1]}</span>` : ""}${j.applied ? '<span class="tag good">Applied</span>' : ""}
+          ${b ? `<span class="tag ${b[0]}">${b[1]}</span>` : ""}${j.applied ? `<span class="tag good">Applied${j.applied_on ? " " + esc(j.applied_on) : ""}</span>` : ""}
           <span class="age">${j.ago ? "Posted " + esc(j.ago) : ""}</span></div></div></article>`;
-  }).join("") || `<p class="empty">No jobs match these filters.</p>`;
+  }).join("") + (more > 0 ? `<button class="more" data-more>Show ${Math.min(PAGE, more)} more of ${more}</button>` : "") ||
+    `<p class="empty">${applied ? "Jobs you mark as applied appear here." : "No jobs match these filters."}</p>`;
 }
 
 function fact(label, value) { return value ? `<div><span>${label}</span>${esc(value)}</div>` : ""; }
@@ -274,7 +289,20 @@ function buildBox(j) {
   return `<div class="box"><h4>Application</h4>${body}</div>`;
 }
 
+function translationBox(j) {
+  if (j.lang !== "German" || !j.description) return "";
+  const t = j.translation || {};
+  let body;
+  if (j.translating) body = `<div class="row"><div class="spinner"></div>${ENGINE[j.translating]} is translating the posting…</div>`;
+  else if (t.text) body = `<p class="d-en">${esc(t.title)}</p><div class="prose">${esc(t.text)}</div><p class="note">Translated by ${ENGINE[t.engine]}.</p>`;
+  else body = `<div class="row"><button data-act="translate">Translate to English</button>
+      <span class="note" style="margin:0">With ${ENGINE[engine]}, the engine picked above. It takes up to a minute.</span></div>
+      ${t.error ? `<div class="msg bad">${esc(t.error)}</div>` : ""}`;
+  return `<div class="box"><h4>In English</h4>${body}</div>`;
+}
+
 function renderDetail(j) {
+  detailBusy = !!j && (j.status === "Checking…" || !!j.translating);
   if (!j) { $("#detail").innerHTML = `<div class="empty"><h2>Pick a job</h2><p>Its posting, links and the CV builder appear here.</p></div>`; return; }
   const s = j.snippets || {};
   const join = v => Array.isArray(v) ? v.join(" · ") : v;
@@ -290,13 +318,14 @@ function renderDetail(j) {
       <button class="ghost" data-copy="${esc(j.apply || j.url)}">Copy link</button>
     </div>
     ${buildBox(j)}
+    ${translationBox(j)}
     <div class="box"><h4>At a glance</h4><div class="grid">
       ${fact("Match score", j.score + " / 100 (quick check)")}${fact("Experience", join(s.experience))}${fact("Language", join(s.language))}
       ${fact("Hours", join(s.hours))}${fact("Start and duration", join(s.start))}${fact("Salary", join(s.salary))}
       ${fact("Enrolment", join(s.enrolment))}${fact("Apply route", j.apply_route)}${fact("Checked", j.checked)}</div></div>
     ${s.needs ? `<div class="box"><h4>What they want</h4><div class="prose">${esc(s.needs.replaceAll(" • ", "\n• "))}</div></div>` : ""}
     ${s.tasks ? `<div class="box"><h4>What you'd do</h4><div class="prose">${esc(s.tasks.replaceAll(" • ", "\n• "))}</div></div>` : ""}
-    <div class="box"><details${s.needs ? "" : " open"}><summary>Full posting</summary><div class="prose" style="margin-top:10px">${esc(j.description || "The full text loads when this job is checked on its source.")}</div></details></div>
+    <div class="box"><details${s.needs || (j.translation || {}).text ? "" : " open"}><summary>${j.lang === "German" ? "Original posting (German)" : "Full posting"}</summary><div class="prose" style="margin-top:10px">${esc(j.description || "The full text loads when this job is checked on its source.")}</div></details></div>
     <div class="bottom"><button data-flag="applied">${j.applied ? "Mark as not applied" : "Mark as applied"}</button>
       <button class="ghost" data-flag="hidden">Hide this job</button></div>`;
 }
@@ -309,36 +338,54 @@ async function loadJobs() {
   renderList();
 }
 async function select(id) {
-  selected = id; renderList();
+  selected = id;  // mark the card without redrawing the list
+  for (const c of document.querySelectorAll(".card.active")) c.classList.remove("active");
+  const card = id && document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  if (card) card.classList.add("active");
   renderDetail(id ? await api.get_job(id) : null);
+}
+
+function put(sel, html) {  // writes only what changed, so the poll doesn't make the page redraw every 1.5 s
+  const el = $(sel);
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
 }
 
 async function poll() {
   const st = await api.state();
-  busyRefresh = !!(st.refresh && st.refresh.running);
-  $("#btn-check").disabled = busyRefresh;
-  $("#run-status").innerHTML = st.refresh && st.refresh.message ? `${busyRefresh ? '<div class="spinner"></div>' : ""}<span>${esc(st.refresh.message)}</span>` : "";
-  $("#last-check").textContent = st.last_check ? `Last check ${st.last_check}${st.new_count ? " · " + st.new_count + " new" : ""}` : "Not checked yet";
-  $("#tasks").innerHTML = st.tasks.length ? `<span class="label">Builds</span>` + st.tasks.map(t =>
+  const r = st.refresh || {};
+  busyRefresh = !!r.running;
+  $("#btn-check").disabled = busyRefresh && !(r.free_only && !r.queued);  // usable during the automatic free check
+  put("#run-status", r.message ? `${busyRefresh ? '<div class="spinner"></div>' : ""}<span>${esc(r.message)}${r.queued ? " · the full check runs next" : ""}</span>` : "");
+  put("#last-check", st.last_check ? `Last check ${esc(st.last_check)}${st.new_count ? " · " + st.new_count + " new since you opened the app" : ""}` : "Not checked yet");
+  put("#tasks", st.tasks.length ? `<span class="label">Builds</span>` + st.tasks.map(t =>
     `<span class="task ${t.state === "questions" ? "waiting" : t.state}" data-id="${esc(t.job)}">${["analyzing", "building"].includes(t.state) ? '<div class="spinner"></div>' : ""}${esc(t.company)} · ${ENGINE[t.engine]} · ${BUILD[t.state][1]}${t.elapsed ? " · " + t.elapsed : ""}</span>`).join("")
-    : `<span class="label">No CVs being built</span>`;
+    : `<span class="label">No CVs being built</span>`);
   if (st.version !== version) {
     version = st.version;
     await loadJobs();
     if (selected) renderDetail(await api.get_job(selected));
-  }
+  } else if (selected && detailBusy) renderDetail(await api.get_job(selected));  // a check or translation of the open job
 }
 
 function bind() {
-  $("#list").addEventListener("click", e => { const c = e.target.closest(".card"); if (c) select(c.dataset.id); });
+  $("#list").addEventListener("click", e => {
+    if (e.target.closest("[data-more]")) { limit += PAGE; return renderList(); }
+    const c = e.target.closest(".card"); if (c) select(c.dataset.id);
+  });
   $("#list").addEventListener("keydown", e => { const c = e.target.closest(".card"); if (c && e.key === "Enter") select(c.dataset.id); });
   $("#tasks").addEventListener("click", e => { const t = e.target.closest(".task"); if (t) select(t.dataset.id); });
-  $("#q").addEventListener("input", e => { filters.q = e.target.value; renderList(); });
-  $("#f-type").addEventListener("change", e => { filters.type = e.target.value; renderList(); });
-  $("#f-source").addEventListener("change", e => { filters.source = e.target.value; renderList(); });
-  $("#f-sort").addEventListener("change", e => { filters.sort = e.target.value; renderList(); api.save_settings({sort: filters.sort}); });
-  for (const [id, key] of [["#f-new", "newOnly"], ["#f-open", "openOnly"], ["#f-applied", "showApplied"]]) {
-    $(id).addEventListener("click", e => { filters[key] = !filters[key]; e.target.setAttribute("aria-pressed", filters[key]); renderList(); });
+  $(".views").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    filters.view = $(".toolbar").dataset.view = b.dataset.view;
+    for (const x of document.querySelectorAll(".views button")) x.setAttribute("aria-pressed", x === b);
+    refilter();
+  });
+  $("#q").addEventListener("input", e => { filters.q = e.target.value; refilter(); });
+  $("#f-type").addEventListener("change", e => { filters.type = e.target.value; refilter(); });
+  $("#f-source").addEventListener("change", e => { filters.source = e.target.value; refilter(); });
+  $("#f-sort").addEventListener("change", e => { filters.sort = e.target.value; refilter(); api.save_settings({sort: filters.sort}); });
+  for (const [id, key] of [["#f-new", "newOnly"], ["#f-open", "openOnly"]]) {
+    $(id).addEventListener("click", e => { filters[key] = !filters[key]; e.target.setAttribute("aria-pressed", filters[key]); refilter(); });
   }
   $("#btn-check").addEventListener("click", async () => { await api.check_jobs(); poll(); });
   $("#detail").addEventListener("click", async e => {
@@ -350,6 +397,7 @@ function bind() {
     if (b.dataset.flag) { await api.toggle(selected, b.dataset.flag); if (b.dataset.flag === "hidden") select(null); return poll(); }
     if (b.dataset.act === "create") { b.disabled = true; await api.create(selected, engine); return poll(); }
     if (b.dataset.act === "retry") { engine = b.dataset.engineTo; b.disabled = true; await api.create(selected, engine); return poll(); }
+    if (b.dataset.act === "translate") { b.disabled = true; await api.translate(selected, engine); return renderDetail(await api.get_job(selected)); }
     if (b.dataset.act === "answer") {
       const job = await api.get_job(selected), qs = job.builds.slice(-1)[0].questions.to_ask || [];
       const have = [], lack = [];
@@ -390,6 +438,7 @@ window.addEventListener("pywebviewready", async () => {
   bind();
   await poll();
   setInterval(poll, 1500);
+  api.check_jobs(true);  // look for new jobs on the free sources; Apify (paid) only runs from the button
 });
 </script>
 </body>

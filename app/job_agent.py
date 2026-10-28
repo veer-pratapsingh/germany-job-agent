@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -41,6 +42,7 @@ LIMIT_HINT = re.compile(r"\b(?:limits?|quota|usage|credits?|429|overloaded)\b", 
 TABLE_END = re.compile(r"^\|.*\n(?!\|)", re.M)  # the last row of a markdown table
 RUNNING = set()  # engine processes, so closing the app can stop them
 CLOSING = threading.Event()
+LIGHT = Path(tempfile.gettempdir()) / "GermanyJobAgent"  # translations run outside the project, so its instructions don't load
 
 ANALYZE = """You are helping Veer apply for one job. Do steps 1 to 3 of .claude/skills/job-apply/SKILL.md (read the \
 posting, analyse it, build the keyword map) and nothing else.
@@ -67,6 +69,14 @@ skill's usual file names. Create the folder, and write nothing into the project 
 in jobs/app/renders/.
 - Nobody can answer questions during this run, so don't ask any.
 Finish with the short report step 11 describes."""
+
+TRANSLATE = """Translate this German job posting into English. Keep its structure: headings, bullet points and line \
+breaks. The first line of your reply is the job title in English, and the translated posting follows. Reply with the \
+translation only.
+
+{title}
+
+{text}"""
 
 ANALYZE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["to_ask", "posting_language", "fit_note"],
                   "properties": {"to_ask": {"type": "array", "maxItems": 8, "items": {
@@ -120,6 +130,12 @@ def posted(j: dict, at: dt.datetime) -> tuple:
     ago = ("just now" if mins < 2 else f"{mins} minutes ago" if mins < 60 else "1 hour ago" if mins < 120 else
            f"{mins // 60} hours ago" if mins < 1440 else "1 day ago" if mins < 2880 else f"{mins // 1440} days ago")
     return ts.isoformat(timespec="seconds"), ago
+
+
+def parse_translation(reply: str) -> tuple:
+    """(title, text) from an engine's translation, whose first line is the title."""
+    title, _, text = reply.strip().partition("\n")
+    return title.strip(" #*"), text.strip()
 
 
 def parse_json(text: str) -> dict:
@@ -202,27 +218,37 @@ def load_settings() -> dict:
         return dict(DEFAULTS)
 
 
-def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None) -> list:
+def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bool = False) -> list:
+    """The command for a CV run, or with light=True for a translation: a small, fast model with no tools."""
     if engine == "claude":
         exe = NPM / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        claude = str(exe) if exe.exists() else shutil.which("claude") or "claude"
+        if light:  # Sonnet at low effort: Haiku thought through 15-25k tokens per posting and took twice as long
+            return [claude, "-p", "--output-format", "json", "--model", "sonnet", "--effort", "low", "--tools", "",
+                    "--strict-mcp-config",
+                    "--disable-slash-commands", "--no-session-persistence",
+                    "--system-prompt", "You translate German job postings into clear English."]
         rules = DATA / "claude-permissions.json"  # only file edits and the PDF tools, nothing else
         rules.write_text(json.dumps({"permissions": {"allow": [
             "Read", "Edit", "Write", "Glob", "Grep", "Bash(python .claude/skills/job-apply/scripts/build_cv.py:*)",
             "Bash(pdftoppm:*)", "Bash(pdftotext:*)", "PowerShell(python .claude/skills/job-apply/scripts/build_cv.py:*)",
             "PowerShell(pdftoppm:*)"]}}), encoding="utf-8")
-        return [str(exe) if exe.exists() else shutil.which("claude") or "claude", "-p", "--output-format", "json",
-                "--model", s["claude_model"], "--effort", s["claude_effort"], "--permission-mode", "acceptEdits",
-                "--settings", str(rules)]
+        return [claude, "-p", "--output-format", "json", "--model", s["claude_model"], "--effort", s["claude_effort"],
+                "--permission-mode", "acceptEdits", "--settings", str(rules)]
     js = NPM / "@openai" / "codex" / "bin" / "codex.js"
-    # writes stay inside the project; "unelevated" runs as his own user, because MiKTeX can't start under the
-    # separate sandbox user that the "elevated" Windows sandbox uses
-    cmd = ([shutil.which("node") or "node", str(js)] if js.exists() else [shutil.which("codex") or "codex"]) + [
-        "exec", "-s", "workspace-write", "-c", 'windows.sandbox="unelevated"', "-C", str(PROJECT),
-        "--skip-git-repo-check", "-o", str(reply)]
+    cmd = [shutil.which("node") or "node", str(js)] if js.exists() else [shutil.which("codex") or "codex"]
+    if light:
+        cmd += ["exec", "-s", "read-only", "-C", str(LIGHT), "--skip-git-repo-check", "-o", str(reply),
+                "-c", 'model_reasoning_effort="low"']
+    else:
+        # writes stay inside the project; "unelevated" runs as his own user, because MiKTeX can't start under the
+        # separate sandbox user that the "elevated" Windows sandbox uses
+        cmd += ["exec", "-s", "workspace-write", "-c", 'windows.sandbox="unelevated"', "-C", str(PROJECT),
+                "--skip-git-repo-check", "-o", str(reply)]
+        if s["codex_effort"]:
+            cmd += ["-c", f'model_reasoning_effort="{s["codex_effort"]}"']
     if s["codex_model"]:
         cmd += ["-m", s["codex_model"]]
-    if s["codex_effort"]:
-        cmd += ["-c", f'model_reasoning_effort="{s["codex_effort"]}"']
     return cmd + (["--output-schema", str(schema)] if schema else []) + ["-"]
 
 
@@ -231,16 +257,18 @@ def stop(p: subprocess.Popen):
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
 
 
-def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path = None) -> tuple:
-    """(ok, reply): runs Claude Code or Codex headless in the project folder, with the prompt on stdin."""
+def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path = None, light: bool = False) -> tuple:
+    """(ok, reply): runs Claude Code or Codex headless in the project folder (a translation: outside it), with the
+    prompt on stdin."""
     closed = (False, "Stopped because the app was closed.")
     if CLOSING.is_set():
         return closed
     reply = log.with_suffix(".reply.txt")
-    cmd = engine_cmd(engine, load_settings(), reply, schema)
+    cmd = engine_cmd(engine, load_settings(), reply, schema, light)
+    LIGHT.mkdir(exist_ok=True)
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             encoding="utf-8", errors="replace", cwd=PROJECT, creationflags=NO_WINDOW)
+                             encoding="utf-8", errors="replace", cwd=LIGHT if light else PROJECT, creationflags=NO_WINDOW)
     except OSError as e:
         return False, f"couldn't start {engine}: {e}"
     RUNNING.add(p)
@@ -292,7 +320,8 @@ class Store:
             old = self.data["jobs"]
             for i, j in found.items():
                 prev = old.get(i, {})
-                j.update({k: prev[k] for k in ("first_seen", "applied", "hidden", "builds") if k in prev})
+                j.update({k: prev[k] for k in ("first_seen", "applied", "applied_at", "hidden", "builds", "translation")
+                          if k in prev})
                 j.setdefault("first_seen", checked_at)
                 j["last_seen"] = checked_at
                 old[i] = j
@@ -315,6 +344,9 @@ class Agent:
         self._refresh = {"running": False, "message": ""}
         self._version = 0
         self._checking = {}  # job id -> "running" or "failed", for jobs checked when he opens them
+        self._translating = {}  # job id -> engine
+        self._queued = False  # a full check asked for while the automatic one runs
+        self._opened = now()  # "new" means found since he opened the app, so the automatic check doesn't hide the rest
         for j in self._store.data["jobs"].values():
             for b in j.get("builds", []):
                 if b["state"] in ACTIVE:  # the app was closed on it, so nothing is running it any more
@@ -331,10 +363,11 @@ class Agent:
                 secs = int(time.time() - dt.datetime.fromisoformat(b["started"]).timestamp())
                 tasks.append({"job": j["id"], "company": j["company"][:28], "engine": b["engine"], "state": b["state"],
                               "elapsed": f"{secs // 60}:{secs % 60:02d}" if b["state"] in ACTIVE else ""})
-        return {"refresh": self._refresh, "version": self._version, "tasks": tasks,
+        refresh = {**self._refresh, "queued": self._queued}
+        return {"refresh": refresh, "version": self._version, "tasks": tasks,
                 "last_check": dt.datetime.fromisoformat(last).strftime("%d %b, %H:%M") if last else "",
-                "new_count": sum(1 for j in js if j.get("first_seen") == last and not j.get("hidden")
-                                 and j.get("status") != "Closed")}
+                "new_count": sum(1 for j in js if j.get("first_seen", "") >= self._opened and not j.get("hidden")
+                                 and not j.get("applied") and j.get("status") != "Closed")}
 
     def list_jobs(self) -> list:
         with self._store.lock:
@@ -358,13 +391,23 @@ class Agent:
         return {**summary, "description": j.get("description", ""), "snippets": j.get("snippets") or {},
                 "url": j.get("url") or j.get("linkedin"), "apply": apply, "published": j.get("published"),
                 "checked": (j.get("checked") or "").replace("T", " "), "builds": j.get("builds") or [],
+                "lang": j.get("lang"), "translation": j.get("translation"), "translating": self._translating.get(job_id, ""),
                 "apply_route": "Company site" if apply else ("Easy Apply on LinkedIn" if j.get("apply_type") ==
                                                               "EASY_APPLY" and src == "LinkedIn" else f"Via {src}")}
 
-    def check_jobs(self):
-        if not self._refresh["running"]:
-            self._refresh = {"running": True, "message": "Starting…"}
-            threading.Thread(target=self._check, daemon=True).start()
+    def check_jobs(self, free_only: bool = False):
+        """free_only is the automatic check when the app opens: Apify (paid) runs only from the button."""
+        if self._refresh["running"]:
+            self._queued = self._queued or not free_only  # pressed during the automatic check: the full one runs next
+            return
+        self._refresh = {"running": True, "message": "Starting…", "free_only": free_only}
+        threading.Thread(target=self._check, args=(free_only,), daemon=True).start()
+
+    def translate(self, job_id: str, engine: str):
+        """Translates a German posting with the engine he picked. The translation is kept with the job."""
+        if engine in ("claude", "codex") and job_id in self._store.data["jobs"] and job_id not in self._translating:
+            self._translating[job_id] = engine
+            threading.Thread(target=self._translate, args=(job_id, engine), daemon=True).start()
 
     def create(self, job_id: str, engine: str):
         """Starts an application: the engine reads the posting first and lists the skills to ask him about."""
@@ -401,6 +444,8 @@ class Agent:
         with self._store.lock:
             j = self._store.data["jobs"][job_id]
             j[flag] = not j.get(flag)
+            if flag == "applied":
+                j["applied_at"] = now() if j[flag] else None
         self._store.save()
         self._changed()
 
@@ -435,7 +480,7 @@ class Agent:
         self._version += 1
 
     def _say(self, message: str):
-        self._refresh = {"running": True, "message": message}
+        self._refresh = {**self._refresh, "running": True, "message": message}
 
     def _busy(self) -> bool:
         with self._store.lock:
@@ -450,15 +495,15 @@ class Agent:
                 "type": j["category"], "score": j.get("prescore", 0),
                 "workplace": "" if j.get("workplace_hint") in (None, "Not stated") else j["workplace_hint"],
                 "sources": [j.get("source", "LinkedIn")] + j.get("also_on", []), "posted": key, "ago": ago,
-                "status": j.get("status", ""), "new": j.get("first_seen") == self._store.data.get("last_check_at"),
-                "applied": bool(j.get("applied")), "hidden": bool(j.get("hidden")), "build": b.get("state")}
+                "status": j.get("status", ""), "new": j.get("first_seen", "") >= self._opened,
+                "applied": bool(j.get("applied")), "applied_at": j.get("applied_at") or "",
+                "applied_on": dt.datetime.fromisoformat(j["applied_at"]).strftime("%d %b") if j.get("applied_at") else "",
+                "hidden": bool(j.get("hidden")), "build": b.get("state")}
 
-    def _check(self):
+    def _check(self, free_only: bool = False):
         try:
             s, started, notes = load_settings(), now(), []
-            # shortcut: one window for all sources, so a source that failed last time isn't searched further back
-            days = window_days(self._store.data.get("last_check_at"), dt.datetime.now())
-            paid = [n for n in ("indeed", "stepstone", "linkedin") if s[n]] if s["apify_token"] else []
+            paid = [n for n in ("indeed", "stepstone", "linkedin") if s[n]] if s["apify_token"] and not free_only else []
             if paid:
                 try:
                     used, limit = jobs.apify_credit(s["apify_token"])
@@ -470,7 +515,13 @@ class Agent:
                 except Exception:
                     pass  # the runs themselves will report a bad token
             names = list(jobs.FREE_SOURCES) + paid
-            self._say(f"Searching {len(names)} sources for jobs posted in the last {days} days…")
+            # back to the oldest last successful search among these sources, so the automatic free-only checks
+            # don't shorten the paid sources' window
+            searched = self._store.data.setdefault("source_checks", {})
+            last = self._store.data.get("last_check_at") or ""  # before per-source times, every check searched them all
+            days = window_days(min(searched.get(n, last) for n in names) or None, dt.datetime.now())
+            self._say(f"Searching {len(names)} {'free ' if free_only else ''}sources for jobs posted in the last "
+                      f"{days} days…")
             items, counts = jobs.fetch_sources(names, days, s["apify_token"], int(s["linkedin_max"]), progress=self._say)
             notes += [f"{k}: {v}" for k, v in counts.items() if not v[0].isdigit()]
             if not items:
@@ -491,13 +542,18 @@ class Agent:
                 if jobs.drop_reason(found[i], applied):
                     newly_dropped[i] = started
                     del found[i]
+            searched.update({n: started for n in names if counts.get(jobs.SOURCES[n], "")[:1].isdigit()})
             self._store.merge(found, started, newly_dropped)
             new = sum(1 for j in found.values() if j["first_seen"] == started)
-            self._refresh = {"running": False, "message": f"Done: {len(found)} jobs, {new} new." +
+            label = "Free sources checked" if free_only else "Done"
+            self._refresh = {"running": False, "message": f"{label}: {new} new jobs." +
                                                           (f" ({'; '.join(notes)})" if notes else "")}
         except Exception as e:
             self._refresh = {"running": False, "message": f"The check failed: {e}"}
         self._changed()
+        if self._queued:
+            self._queued = False
+            self.check_jobs()
 
     def _pick_checks(self, found: dict, top: int) -> list:
         """The best N, plus the best few of each job type and source, minus jobs checked in the last 20 hours."""
@@ -525,7 +581,25 @@ class Agent:
             self._checking.pop(job_id, None)
         except Exception:
             self._checking[job_id] = "failed"  # shows as not checked, and isn't retried until the app restarts
-        self._changed()
+        # no _changed(): reloading every card for one job made the app slow; the open job's panel polls instead
+
+    def _translate(self, job_id: str, engine: str):
+        j = self._store.data["jobs"][job_id]
+        log = self._log(job_id, "translate", engine)
+        try:
+            ok, reply = run_engine(engine, TRANSLATE.format(title=j["title"], text=j.get("description") or ""), log, 600,
+                                   light=True)
+            title, text = parse_translation(reply) if ok else ("", "")
+            hint = " It may have hit its usage limit: try the other engine." if LIMIT_HINT.search(reply) else ""
+            result = {"engine": engine, "title": title, "text": text} if text else \
+                {"error": (reply or "No answer.")[-300:] + hint}
+        except Exception as e:
+            result = {"error": str(e)}
+        with self._store.lock:
+            if job_id in self._store.data["jobs"]:
+                self._store.data["jobs"][job_id]["translation"] = result
+        self._store.save()
+        self._translating.pop(job_id, None)
 
     def _update(self, job_id: str, bid: str, **fields):
         with self._store.lock:
@@ -669,15 +743,33 @@ def selftest():
 
     store = Store(DATA / "selftest-db.json")
     store.data["jobs"] = {
-        "1": {"id": "1", "applied": True, "builds": [{"bid": "b"}], "first_seen": "2026-10-20T08:00:00", "last_seen": "x"},
+        "1": {"id": "1", "applied": True, "applied_at": "2026-10-21T10:00:00", "builds": [{"bid": "b", "state": "done"}],
+              "translation": {"title": "T"}, "first_seen": "2026-10-20T08:00:00", "last_seen": "x"},
         "4": {"id": "4", "first_seen": "2026-10-26T08:00:00", "last_seen": "2026-10-26T08:00:00"},
         "5": {"id": "5", "first_seen": "2026-09-01T08:00:00", "last_seen": "2026-09-01T08:00:00"}}
     store.merge({"1": {"id": "1", "title": "t"}, "2": {"id": "2"}}, "2026-10-27T09:00:00", {"4": "2026-10-27T09:00:00"})
     js = store.data["jobs"]
     assert js["1"]["applied"] and js["1"]["builds"] and js["1"]["first_seen"] == "2026-10-20T08:00:00"
+    assert js["1"]["applied_at"] == "2026-10-21T10:00:00" and js["1"]["translation"] == {"title": "T"}
     assert js["2"]["first_seen"] == "2026-10-27T09:00:00" and "4" not in js and "5" not in js
     assert store.data["dropped"] == {"4": "2026-10-27T09:00:00"}
+    ag = Agent(store)
+    ag.toggle("2", "applied")
+    assert js["2"]["applied"] and js["2"]["applied_at"] >= ag._opened
+    ag.toggle("2", "applied")
+    assert not js["2"]["applied"] and not js["2"]["applied_at"]
+    ag._refresh = {"running": True, "message": "", "free_only": True}  # the automatic check is running
+    ag.check_jobs(True)
+    assert not ag._queued
+    ag.check_jobs()
+    assert ag._queued and ag.state()["refresh"]["queued"]
     store.path.unlink()
+
+    assert parse_translation("# Working student data (m/f/d)\n\nYour tasks:\n- reports") == \
+        ("Working student data (m/f/d)", "Your tasks:\n- reports")
+    claude, codex = (engine_cmd(e, DEFAULTS, Path("r.txt"), light=True) for e in ("claude", "codex"))
+    assert claude[claude.index("--model") + 1] == "sonnet" and claude[claude.index("--tools") + 1] == ""
+    assert codex[codex.index("-s") + 1] == "read-only" and codex[codex.index("-C") + 1] == str(LIGHT)
     print("selftest ok")
 
 

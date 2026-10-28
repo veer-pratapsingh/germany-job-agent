@@ -17,7 +17,9 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
   | Indeed | Through Apify | About $0.04 per check |
   | StepStone | Through Apify | About $0.15 per check |
 
-  Each check searches from the last check (plus a day of overlap), up to 7 days back.
+  Each source is searched back to its own last search (plus a day of overlap), up to 7 days.
+
+- **Checks the free sources by itself** each time the app opens. LinkedIn, Indeed and StepStone cost Apify credit, so they run only when you press **Check for new jobs**.
 
 - **Keeps only real, suitable vacancies.** It drops:
   - recruiting agencies and inactive company pages
@@ -76,14 +78,17 @@ To use the app for someone else, change those names in `app/job_agent.py` and `.
 
 ## Using it
 
-1. Open the app and press **Check for new jobs**. The first check takes about a minute with the free sources, and longer with LinkedIn.
+1. Open the app. It checks the free sources by itself. Press **Check for new jobs** to add LinkedIn, Indeed and StepStone; if you press it during the automatic check, the full check starts right after. "NEW" marks jobs found since you opened the app.
 2. Optional: under **Settings**, paste your Apify API token and press **Test**. It shows how much of the month's credit is left.
    - Before each check, the app reads the remaining credit and skips any paid source whose run wouldn't fit.
 3. Filter by job type, source, "New only" or "Verified open", or search by title, company or city.
    - Sort by **Best match first** or **Newest first**. The app remembers the choice.
    - Each job shows how long ago it was posted: to the minute where the source gives a time (freehire, Arbeitnow, StepStone, Indeed and fresh LinkedIn jobs), otherwise to the day.
+   - The list shows 200 jobs at a time; **Show more** adds the next 200.
 4. Open a job, pick **Claude** or **Codex**, and press **Create CV + cover letter**.
+   - For a German posting, **Translate to English** translates it with the engine you picked: about 15 seconds with Codex, under a minute with Claude. The translation is kept with the job.
 5. Answer the skill questions. The finished files open from the job's panel.
+6. After applying, press **Mark as applied**. The job moves to the **Applied** tab, which lists your applications with the date, newest first.
 
 Settings also hold the engine models and effort levels, the number of builds that run at once, and how many jobs each check verifies.
 
