@@ -33,7 +33,9 @@ CONFIG = Path(os.environ.get("APPDATA", Path.home())) / "GermanyJobAgent" / "set
 NPM = Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules"
 DEFAULTS = {"apify_token": "", "linkedin": True, "indeed": True, "stepstone": True, "linkedin_max": 400,
             "check_top": 60, "parallel": 3, "claude_model": "sonnet", "claude_effort": "medium",
-            "codex_model": "", "codex_effort": "medium", "sort": "best"}
+            "codex_model": "", "codex_effort": "medium", "sort": "best",
+            "jobspy": True, "jobspy_max": 100, "auto_hours": 3, "alert_score": 65}
+TASK = "Germany Job Agent check"  # the Windows scheduled task that checks the free sources while the app is closed
 KEEP_DAYS = 21  # jobs not seen again for this long leave the list, unless he applied or built something for them
 CHECK_FIELDS = ("status", "apply_url", "apply_check", "checked", "snippets", "workplace_hint", "lang", "domain")
 ACTIVE = ("analyzing", "building")
@@ -130,6 +132,74 @@ def posted(j: dict, at: dt.datetime) -> tuple:
     ago = ("just now" if mins < 2 else f"{mins} minutes ago" if mins < 60 else "1 hour ago" if mins < 120 else
            f"{mins // 60} hours ago" if mins < 1440 else "1 day ago" if mins < 2880 else f"{mins // 1440} days ago")
     return ts.isoformat(timespec="seconds"), ago
+
+
+def applicants(raw) -> tuple:
+    """(short text, early?) from LinkedIn's applicant line: "Be among the first 25 applicants" -> "Under 25"."""
+    s = str(raw or "")
+    n = re.search(r"\d+", s)
+    if not n:
+        return "", False
+    if re.search(r"first", s, re.I):
+        return f"Under {n[0]} applicants", True
+    if re.search(r"over", s, re.I):
+        return f"{n[0]}+ applicants", False
+    return f"{n[0]} applicants", int(n[0]) <= 25
+
+
+def app_open() -> bool:
+    """Is the app's window open? It holds the GermanyJobAgent mutex while it is."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    h = ctypes.windll.kernel32.OpenMutexW(0x00100000, False, "GermanyJobAgent")  # SYNCHRONIZE access
+    if h:
+        ctypes.windll.kernel32.CloseHandle(h)
+    return bool(h)
+
+
+def notify(title: str, lines: list, url: str = ""):
+    """A Windows notification from "Germany Job Agent". Clicking it opens url, the best job's posting."""
+    if sys.platform != "win32":
+        return
+    import base64
+    import winreg
+    from xml.sax.saxutils import escape
+    # registering the app's ID gives the notification its name and icon (no installer or shortcut needed)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\AppUserModelId\GermanyJobAgent") as k:
+        winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "Germany Job Agent")
+        winreg.SetValueEx(k, "IconUri", 0, winreg.REG_SZ, str(Path(__file__).with_name("icon.png")))
+    launch = f" activationType='protocol' launch='{escape(url, {chr(39): '&apos;'})}'" if url else ""
+    xml = (f"<toast{launch}><visual><binding template='ToastGeneric'><text>{escape(title)}</text>"
+           + "".join(f"<text>{escape(line)}</text>" for line in lines[:2]) + "</binding></visual></toast>")
+    script = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] > $null\n"
+              "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] > $null\n"
+              "$x = New-Object Windows.Data.Xml.Dom.XmlDocument\n$x.LoadXml('" + xml.replace("'", "''") + "')\n"
+              "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('GermanyJobAgent').Show("
+              "[Windows.UI.Notifications.ToastNotification]::new($x))")
+    subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode()],
+                   capture_output=True, creationflags=NO_WINDOW, timeout=60)
+
+
+def schedule(hours: float) -> str:
+    """Creates, changes or (hours 0) removes the Windows task that runs the free check while the app is closed.
+    Returns an error message, or "" when it worked."""
+    if hours <= 0:
+        subprocess.run(["schtasks", "/Delete", "/F", "/TN", TASK], capture_output=True, creationflags=NO_WINDOW)
+        return ""
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    r = subprocess.run(["schtasks", "/Create", "/F", "/TN", TASK, "/SC", "MINUTE",
+                        "/MO", str(max(30, min(1439, round(hours * 60)))),
+                        "/TR", f'"{pyw if pyw.exists() else sys.executable}" "{Path(__file__).resolve()}" --check'],
+                       capture_output=True, text=True, creationflags=NO_WINDOW)
+    if r.returncode:
+        return (r.stderr or r.stdout).strip()
+    # schtasks alone would skip runs on battery and runs missed while the PC slept
+    subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-ScheduledTask -TaskName '{TASK}' -Settings "
+                    "(New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+                    "-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 50))"],
+                   capture_output=True, creationflags=NO_WINDOW)
+    return ""
 
 
 def parse_translation(reply: str) -> tuple:
@@ -306,6 +376,11 @@ class Store:
         except (OSError, ValueError):
             self.data = {"last_check_at": None, "jobs": {}, "dropped": {}}
 
+    def reload(self):
+        """Reads the file again: the scheduled check runs for minutes, and the app may have saved meanwhile."""
+        with self.lock:
+            self.data = json.loads(self.path.read_text(encoding="utf-8"))
+
     def save(self):
         with self.lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,8 +401,11 @@ class Store:
                 j["last_seen"] = checked_at
                 old[i] = j
             cutoff = (dt.datetime.fromisoformat(checked_at) - dt.timedelta(days=KEEP_DAYS)).isoformat()
+            stale = (dt.datetime.fromisoformat(checked_at) - dt.timedelta(days=31)).date().isoformat()
             self.data["dropped"] = {i: d for i, d in {**self.data.get("dropped", {}), **dropped}.items() if d >= cutoff}
-            for i in [i for i, j in old.items() if (j["last_seen"] < cutoff or i in dropped)
+            # also postings over a month old: the Bundesagentur ignored its date filter for a while and let them in
+            for i in [i for i, j in old.items() if (j["last_seen"] < cutoff or i in dropped
+                                                    or (j.get("published") or "9") < stale)
                       and not j.get("applied") and not j.get("builds")]:
                 del old[i]
             self.data["last_check_at"] = checked_at
@@ -346,6 +424,7 @@ class Agent:
         self._checking = {}  # job id -> "running" or "failed", for jobs checked when he opens them
         self._translating = {}  # job id -> engine
         self._queued = False  # a full check asked for while the automatic one runs
+        self._background = False  # the scheduled check, running while the app is closed
         self._opened = now()  # "new" means found since he opened the app, so the automatic check doesn't hide the rest
         for j in self._store.data["jobs"].values():
             for b in j.get("builds", []):
@@ -402,6 +481,15 @@ class Agent:
             return
         self._refresh = {"running": True, "message": "Starting…", "free_only": free_only}
         threading.Thread(target=self._check, args=(free_only,), daemon=True).start()
+
+    def auto_check(self, opening: bool = False):
+        """The page calls this when it opens and every 10 minutes. A free check starts when the last check is
+        old enough: half an hour when the app opens (the scheduled task may have just run), the set interval after."""
+        hours = float(load_settings()["auto_hours"])
+        last = self._store.data.get("last_check_at")
+        due = dt.timedelta(minutes=30) if opening else dt.timedelta(hours=hours)
+        if (opening or hours > 0) and (not last or dt.datetime.now() - dt.datetime.fromisoformat(last) >= due):
+            self.check_jobs(True)
 
     def translate(self, job_id: str, engine: str):
         """Translates a German posting with the engine he picked. The translation is kept with the job."""
@@ -464,9 +552,12 @@ class Agent:
 
     def save_settings(self, values: dict):
         s = load_settings()
+        hours = s["auto_hours"]
         s.update({k: type(DEFAULTS[k])(v) for k, v in values.items() if k in DEFAULTS and (k != "apify_token" or v)})
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         CONFIG.write_text(json.dumps(s, indent=1), encoding="utf-8")
+        if s["auto_hours"] != hours:
+            threading.Thread(target=schedule, args=(s["auto_hours"],), daemon=True).start()
 
     def test_apify(self, token: str) -> str:
         try:
@@ -489,6 +580,7 @@ class Agent:
     def _summary(self, j: dict) -> dict:
         b = (j.get("builds") or [{}])[-1]
         key, ago = posted(j, dt.datetime.now())
+        count, early = applicants(j.get("applicants"))
         locs = [jobs.place(l) for l in j["locations"]]
         return {"id": j["id"], "title": j["title"], "company": j["company"],
                 "location": " / ".join(locs[:2]) + (f" +{len(locs) - 2}" if len(locs) > 2 else ""),
@@ -498,6 +590,7 @@ class Agent:
                 "status": j.get("status", ""), "new": j.get("first_seen", "") >= self._opened,
                 "applied": bool(j.get("applied")), "applied_at": j.get("applied_at") or "",
                 "applied_on": dt.datetime.fromisoformat(j["applied_at"]).strftime("%d %b") if j.get("applied_at") else "",
+                "applicants": count, "early": early,
                 "hidden": bool(j.get("hidden")), "build": b.get("state")}
 
     def _check(self, free_only: bool = False):
@@ -514,7 +607,8 @@ class Agent:
                     paid = fits
                 except Exception:
                     pass  # the runs themselves will report a bad token
-            names = list(jobs.FREE_SOURCES) + paid
+            # JobSpy (free, from this PC) unless the paid Apify search for the same site runs anyway
+            names = list(jobs.FREE_SOURCES) + [n for n in jobs.JOBSPY if s["jobspy"] and n.removeprefix("jobspy_") not in paid] + paid
             # back to the oldest last successful search among these sources, so the automatic free-only checks
             # don't shorten the paid sources' window
             searched = self._store.data.setdefault("source_checks", {})
@@ -522,7 +616,8 @@ class Agent:
             days = window_days(min(searched.get(n, last) for n in names) or None, dt.datetime.now())
             self._say(f"Searching {len(names)} {'free ' if free_only else ''}sources for jobs posted in the last "
                       f"{days} days…")
-            items, counts = jobs.fetch_sources(names, days, s["apify_token"], int(s["linkedin_max"]), progress=self._say)
+            items, counts = jobs.fetch_sources(names, days, s["apify_token"], int(s["linkedin_max"]), progress=self._say,
+                                               jobspy_max=int(s["jobspy_max"]))
             notes += [f"{k}: {v}" for k, v in counts.items() if not v[0].isdigit()]
             if not items:
                 raise RuntimeError("no source returned any jobs. " + "; ".join(notes))
@@ -542,9 +637,18 @@ class Agent:
                 if jobs.drop_reason(found[i], applied):
                     newly_dropped[i] = started
                     del found[i]
-            searched.update({n: started for n in names if counts.get(jobs.SOURCES[n], "")[:1].isdigit()})
+            if self._background:  # the scheduled check must never write over what the app saved meanwhile
+                if app_open():
+                    raise RuntimeError("the app was opened during the check, and it checks by itself")
+                self._store.reload()
+            self._store.data.setdefault("source_checks", {}).update(
+                {n: started for n in names if counts.get(jobs.SOURCES[n], "")[:1].isdigit()})
             self._store.merge(found, started, newly_dropped)
             new = sum(1 for j in found.values() if j["first_seen"] == started)
+            strong = sorted((j for j in found.values() if j["first_seen"] == started and j.get("status") != "Closed"
+                             and j.get("prescore", 0) >= s["alert_score"] > 0), key=lambda j: -j["prescore"])
+            if strong:
+                self._alert(strong)
             label = "Free sources checked" if free_only else "Done"
             self._refresh = {"running": False, "message": f"{label}: {new} new jobs." +
                                                           (f" ({'; '.join(notes)})" if notes else "")}
@@ -554,6 +658,21 @@ class Agent:
         if self._queued:
             self._queued = False
             self.check_jobs()
+
+    def _alert(self, strong: list):
+        """A notification for the strong new matches. Clicking it opens the best one's posting."""
+        def line(j):
+            n = applicants(j.get("applicants"))[0]
+            return f"{j['title']} · {j['company']}" + (f" · {n}" if n else "")
+        if len(strong) == 1:
+            title, lines = f"Strong new match ({strong[0]['prescore']})", [line(strong[0]), jobs.place(strong[0]["locations"][0])]
+        else:
+            more = f" and {len(strong) - 2} more" if len(strong) > 2 else ""
+            title, lines = f"{len(strong)} strong new jobs", [line(strong[0]), "Also " + line(strong[1]) + more]
+        try:
+            notify(title, lines, strong[0].get("url") or strong[0].get("linkedin") or "")
+        except Exception:
+            pass  # a notification that can't show must not fail the check
 
     def _pick_checks(self, found: dict, top: int) -> list:
         """The best N, plus the best few of each job type and source, minus jobs checked in the last 20 hours."""
@@ -706,6 +825,9 @@ def selftest():
     assert posted({"posted_at": "2026-10-27"}, dt.datetime(2026, 10, 27, 1)) == ("2026-10-27T00:00:00", "today")
     assert posted({}, at) == ("", "") and posted({"published": "soon"}, at) == ("", "")
     assert posted({"posted_at": "2026-10-27T09:10:00+01:00"}, at)[0] > posted({"published": "2026-10-26"}, at)[0]
+    assert applicants("Be among the first 25 applicants") == ("Under 25 applicants", True)
+    assert applicants("Over 200 applicants") == ("200+ applicants", False) and applicants(None) == ("", False)
+    assert applicants("39") == ("39 applicants", False) and applicants("12 applicants") == ("12 applicants", True)
     assert affordable(["linkedin", "indeed", "stepstone"], {"linkedin_max": 400}, 0.2) == ["indeed", "stepstone"]
     assert affordable(["linkedin", "indeed"], {"linkedin_max": 400}, 5) == ["indeed", "linkedin"]
 
@@ -746,12 +868,16 @@ def selftest():
         "1": {"id": "1", "applied": True, "applied_at": "2026-10-21T10:00:00", "builds": [{"bid": "b", "state": "done"}],
               "translation": {"title": "T"}, "first_seen": "2026-10-20T08:00:00", "last_seen": "x"},
         "4": {"id": "4", "first_seen": "2026-10-26T08:00:00", "last_seen": "2026-10-26T08:00:00"},
-        "5": {"id": "5", "first_seen": "2026-09-01T08:00:00", "last_seen": "2026-09-01T08:00:00"}}
+        "5": {"id": "5", "first_seen": "2026-09-01T08:00:00", "last_seen": "2026-09-01T08:00:00"},
+        "6": {"id": "6", "published": "2025-02-01", "first_seen": "2026-10-26T08:00:00", "last_seen": "2026-10-26T08:00:00"},
+        "7": {"id": "7", "published": "2025-02-01", "applied": True, "first_seen": "2026-10-26T08:00:00",
+              "last_seen": "2026-10-26T08:00:00"}}
     store.merge({"1": {"id": "1", "title": "t"}, "2": {"id": "2"}}, "2026-10-27T09:00:00", {"4": "2026-10-27T09:00:00"})
     js = store.data["jobs"]
     assert js["1"]["applied"] and js["1"]["builds"] and js["1"]["first_seen"] == "2026-10-20T08:00:00"
     assert js["1"]["applied_at"] == "2026-10-21T10:00:00" and js["1"]["translation"] == {"title": "T"}
     assert js["2"]["first_seen"] == "2026-10-27T09:00:00" and "4" not in js and "5" not in js
+    assert "6" not in js and "7" in js  # a stale posting goes, unless he applied
     assert store.data["dropped"] == {"4": "2026-10-27T09:00:00"}
     ag = Agent(store)
     ag.toggle("2", "applied")
@@ -773,6 +899,19 @@ def selftest():
     print("selftest ok")
 
 
+def background_check():
+    """What the scheduled task runs: the free check while the app is closed, then a notification for strong new
+    matches. While the app is open, it checks by itself, so this does nothing."""
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    globals()["_check_mutex"] = k32.CreateMutexW(None, False, "GermanyJobAgentCheck")
+    if ctypes.get_last_error() == 183 or app_open():  # an earlier run is still going, or the app is open
+        return
+    agent = Agent()
+    agent._background = True
+    agent._check(free_only=True)
+
+
 def main():
     import webview
     if sys.platform == "win32":
@@ -785,6 +924,10 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GermanyJobAgent")  # own taskbar icon, not Python's
     DATA.mkdir(parents=True, exist_ok=True)
     agent = Agent()
+    hours = load_settings()["auto_hours"]
+    if hours > 0 and subprocess.run(["schtasks", "/Query", "/TN", TASK], capture_output=True,
+                                    creationflags=NO_WINDOW).returncode:  # first start after an update: set it up
+        threading.Thread(target=schedule, args=(hours,), daemon=True).start()
     screen = webview.screens[0]  # fit laptop screens, e.g. 1536 x 864 at 125% scaling
     window = webview.create_window("Germany Job Agent", str(Path(__file__).with_name("ui.html")), js_api=agent,
                                    width=min(1360, screen.width - 60), height=min(880, screen.height - 90),
@@ -799,4 +942,11 @@ def main():
 
 
 if __name__ == "__main__":
-    selftest() if "--selftest" in sys.argv else main()
+    if "--selftest" in sys.argv:
+        selftest()
+    elif "--check" in sys.argv:
+        background_check()
+    elif "--schedule" in sys.argv:
+        print(schedule(load_settings()["auto_hours"]) or "scheduled")
+    else:
+        main()

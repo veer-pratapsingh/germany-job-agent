@@ -173,7 +173,7 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
       <label for="s-token">Apify API token</label>
       <div class="row"><input type="password" id="s-token" style="flex:1" placeholder="Paste your token" autocomplete="off">
         <button type="button" id="s-test">Test</button></div>
-      <small id="s-token-note">Needed for LinkedIn, Indeed and StepStone. Find it in Apify Console under Settings → API &amp; Integrations. It's saved only on this PC.</small>
+      <small id="s-token-note">Needed for the paid searches below, which bring more LinkedIn jobs per check, and StepStone. Find it in Apify Console under Settings → API &amp; Integrations. It's saved only on this PC.</small>
     </div>
     <div class="field">
       <label>Paid sources (through Apify)</label>
@@ -182,6 +182,19 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
       <label class="check"><input type="checkbox" id="s-stepstone"> StepStone: about $0.15 per check</label>
       <small>The Bundesagentur für Arbeit, freehire and Arbeitnow are always searched and cost nothing.</small>
     </div>
+    <div class="field">
+      <label class="check"><input type="checkbox" id="s-jobspy"> Free LinkedIn and Indeed search (JobSpy, runs from this PC)</label>
+      <small>Used in every check unless the paid search for the same site runs. LinkedIn starts refusing after a few hundred jobs, so the app pauses it for 30 minutes when it does.</small>
+    </div>
+    <div class="two">
+      <div class="field"><label for="s-jsmax">Free LinkedIn jobs per check</label><input type="number" id="s-jsmax" min="20" max="300" step="10"></div>
+      <div class="field"><label for="s-auto">Check the free sources every</label>
+        <div class="row"><input type="number" id="s-auto" min="0" max="23" step="0.5" style="width:90px"> hours</div>
+        <small>Also while the app is closed (PC on). 0 turns it off.</small></div>
+    </div>
+    <div class="field"><label for="s-alert">Notify me about new jobs that score at least</label>
+      <input type="number" id="s-alert" min="0" max="100" style="width:90px">
+      <small>A Windows notification; clicking it opens the best job's posting. 0 turns it off.</small></div>
     <div class="two">
       <div class="field"><label for="s-limax">LinkedIn jobs per check</label><input type="number" id="s-limax" min="50" max="3000" step="50"></div>
       <div class="field"><label for="s-top">Jobs checked per run</label><input type="number" id="s-top" min="10" max="200" step="10"><small>Opened on their source to confirm they're still open</small></div>
@@ -246,6 +259,7 @@ function renderList() {
         <div class="tags">${j.new ? '<span class="tag new">NEW</span>' : ""}<span class="tag">${esc(j.type)}</span>
           ${j.workplace && j.workplace !== "Not stated" ? `<span class="tag">${esc(j.workplace)}</span>` : ""}
           <span class="tag">${esc(j.sources[0])}${j.sources.length > 1 ? " +" + (j.sources.length - 1) : ""}</span>
+          ${j.applicants ? `<span class="tag${j.early ? " good" : ""}" title="On LinkedIn">${esc(j.applicants)}</span>` : ""}
           ${b ? `<span class="tag ${b[0]}">${b[1]}</span>` : ""}${j.applied ? `<span class="tag good">Applied${j.applied_on ? " " + esc(j.applied_on) : ""}</span>` : ""}
           <span class="age">${j.ago ? "Posted " + esc(j.ago) : ""}</span></div></div></article>`;
   }).join("") + (more > 0 ? `<button class="more" data-more>Show ${Math.min(PAGE, more)} more of ${more}</button>` : "") ||
@@ -320,7 +334,8 @@ function renderDetail(j) {
     ${buildBox(j)}
     ${translationBox(j)}
     <div class="box"><h4>At a glance</h4><div class="grid">
-      ${fact("Match score", j.score + " / 100 (quick check)")}${fact("Experience", join(s.experience))}${fact("Language", join(s.language))}
+      ${fact("Match score", j.score + " / 100 (quick check)")}${fact("Applicants on LinkedIn", j.applicants)}
+      ${fact("Experience", join(s.experience))}${fact("Language", join(s.language))}
       ${fact("Hours", join(s.hours))}${fact("Start and duration", join(s.start))}${fact("Salary", join(s.salary))}
       ${fact("Enrolment", join(s.enrolment))}${fact("Apply route", j.apply_route)}${fact("Checked", j.checked)}</div></div>
     ${s.needs ? `<div class="box"><h4>What they want</h4><div class="prose">${esc(s.needs.replaceAll(" • ", "\n• "))}</div></div>` : ""}
@@ -422,13 +437,16 @@ async function openSettings() {
   $("#s-limax").value = s.linkedin_max; $("#s-top").value = s.check_top; $("#s-par").value = s.parallel;
   $("#s-cmodel").value = s.claude_model; $("#s-ceffort").value = s.claude_effort;
   $("#s-xmodel").value = s.codex_model; $("#s-xeffort").value = s.codex_effort;
+  $("#s-jobspy").checked = s.jobspy; $("#s-jsmax").value = s.jobspy_max; $("#s-auto").value = s.auto_hours; $("#s-alert").value = s.alert_score;
   $("#settings").showModal();
 }
 async function saveSettings() {
   await api.save_settings({apify_token: $("#s-token").value.trim(), linkedin: $("#s-linkedin").checked,
     indeed: $("#s-indeed").checked, stepstone: $("#s-stepstone").checked, linkedin_max: +$("#s-limax").value || 400,
     check_top: +$("#s-top").value || 60, parallel: +$("#s-par").value || 3, claude_model: $("#s-cmodel").value,
-    claude_effort: $("#s-ceffort").value, codex_model: $("#s-xmodel").value.trim(), codex_effort: $("#s-xeffort").value});
+    claude_effort: $("#s-ceffort").value, codex_model: $("#s-xmodel").value.trim(), codex_effort: $("#s-xeffort").value,
+    jobspy: $("#s-jobspy").checked, jobspy_max: +$("#s-jsmax").value || 100, auto_hours: Math.max(0, +$("#s-auto").value || 0),
+    alert_score: Math.max(0, +$("#s-alert").value || 0)});
   $("#settings").close();
 }
 
@@ -438,7 +456,9 @@ window.addEventListener("pywebviewready", async () => {
   bind();
   await poll();
   setInterval(poll, 1500);
-  api.check_jobs(true);  // look for new jobs on the free sources; Apify (paid) only runs from the button
+  // free sources only (Apify runs only from the button): now unless the scheduled check just ran, then every few hours
+  api.auto_check(true);
+  setInterval(() => api.auto_check(false), 10 * 60 * 1000);
 });
 </script>
 </body>

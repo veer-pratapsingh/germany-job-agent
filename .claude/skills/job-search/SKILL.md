@@ -49,6 +49,7 @@ The desktop app (`app/job_agent.py`) runs the same fetch, pool and check steps w
      - **Arbeitnow:** a German job board.
      - It keeps tech jobs only and writes `OUT/free_sources.json`. Without Apify (Codex, or no credit left), run only this step and pool its file alone.
      - With an Apify token in the `APIFY_TOKEN` environment variable, `--sources ba,freehire,arbeitnow,indeed,stepstone` adds Indeed (about $0.04 a run) and StepStone (about $0.15).
+     - `jobspy_indeed` and `jobspy_linkedin` add Indeed and LinkedIn for free through the JobSpy library, run from this PC. LinkedIn refuses after a few hundred jobs, so keep those runs small; the script then pauses LinkedIn for 30 minutes.
 3. **Download.**
    - Call get-dataset-items with the datasetId, `limit` set to the item count, and `fields: "jobId,jobTitle,companyName,location,publishedAt,postedTime,experienceLevel,contractType,applicationsCount,applyType,keywordMatchScorePercentage,dynamicFilterMatch,salaryInfo,sector,searchString,yearsOfExperience,jobDescription"`.
    - The result is too large for the chat, so Claude Code saves it to a file and prints the path. Don't read the file.

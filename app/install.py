@@ -1,4 +1,5 @@
-"""Installs the app's one dependency and puts a "Germany Job Agent" shortcut on the desktop and in the Start menu.
+"""Installs the app's dependencies, puts a "Germany Job Agent" shortcut on the desktop and in the Start menu, and
+sets up the scheduled check that looks for new jobs while the app is closed.
 
 usage: python app/install.py
 """
@@ -14,7 +15,8 @@ def q(p) -> str:
     return "'" + str(p).replace("'", "''") + "'"
 
 
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(APP / "requirements.txt")], check=True)
+# --user: a system-wide Python often can't replace its own Scripts\*.exe files while installing
+subprocess.run([sys.executable, "-m", "pip", "install", "--user", "-q", "-r", str(APP / "requirements.txt")], check=True)
 pythonw = Path(sys.executable).with_name("pythonw.exe")
 script = f"""
 $shell = New-Object -ComObject WScript.Shell
@@ -30,3 +32,4 @@ foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFo
 }}
 """
 subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
+subprocess.run([sys.executable, str(APP / "job_agent.py"), "--schedule"], check=True)

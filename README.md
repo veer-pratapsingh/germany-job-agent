@@ -13,13 +13,19 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
   | Bundesagentur für Arbeit | Germany's largest job database | Free |
   | freehire | Company career sites on Personio, JOIN, Greenhouse, Softgarden and others | Free (personal use) |
   | Arbeitnow | A German job board | Free |
+  | LinkedIn and Indeed | Through [JobSpy](https://github.com/speedyapply/JobSpy), from your PC | Free; LinkedIn about 100 jobs per check |
   | LinkedIn | Through Apify | About $0.28 per check (400 jobs) |
   | Indeed | Through Apify | About $0.04 per check |
   | StepStone | Through Apify | About $0.15 per check |
 
   Each source is searched back to its own last search (plus a day of overlap), up to 7 days.
 
-- **Checks the free sources by itself** each time the app opens. LinkedIn, Indeed and StepStone cost Apify credit, so they run only when you press **Check for new jobs**.
+- **Checks the free sources by itself** (including LinkedIn and Indeed through JobSpy): when the app opens, then every 3 hours, also while it's closed, through a Windows scheduled task. The paid Apify searches run only when you press **Check for new jobs**.
+  - LinkedIn refuses requests after a few hundred jobs from one connection. When it does, the app leaves LinkedIn alone for 30 minutes instead of asking again.
+
+- **Notifies you about strong new matches** with a Windows notification (score 65 or more by default). Clicking it opens the best job's posting, so you can apply early.
+
+- **Shows how many have applied** on LinkedIn ("Under 25 applicants" in green means you'd be early).
 
 - **Keeps only real, suitable vacancies.** It drops:
   - recruiting agencies and inactive company pages
@@ -66,7 +72,7 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
 python app/install.py
 ```
 
-This installs `pywebview` and creates a "Germany Job Agent" shortcut on the desktop and in the Start menu.
+This installs `pywebview` and `python-jobspy`, creates a "Germany Job Agent" shortcut on the desktop and in the Start menu, and sets up the scheduled task "Germany Job Agent check". Settings change its interval; 0 removes it.
 
 The app needs these files in the project folder. They're personal, so they aren't in this repository:
 
@@ -78,7 +84,7 @@ To use the app for someone else, change those names in `app/job_agent.py` and `.
 
 ## Using it
 
-1. Open the app. It checks the free sources by itself. Press **Check for new jobs** to add LinkedIn, Indeed and StepStone; if you press it during the automatic check, the full check starts right after. "NEW" marks jobs found since you opened the app.
+1. Open the app. It checks the free sources by itself, unless the scheduled check ran in the last half hour. Press **Check for new jobs** to add the paid Apify searches; if you press it during the automatic check, the full check starts right after. "NEW" marks jobs found since you opened the app.
 2. Optional: under **Settings**, paste your Apify API token and press **Test**. It shows how much of the month's credit is left.
    - Before each check, the app reads the remaining credit and skips any paid source whose run wouldn't fit.
 3. Filter by job type, source, "New only" or "Verified open", or search by title, company or city.

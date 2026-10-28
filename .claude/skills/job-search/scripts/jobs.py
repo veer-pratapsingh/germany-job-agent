@@ -21,6 +21,7 @@ import base64
 import datetime as dt
 import html
 import json
+import logging
 import os
 import re
 import shutil
@@ -110,8 +111,11 @@ BA_KEY = {"X-API-Key": "jobboerse-jobsuche"}  # the public client ID from the AP
 FREEHIRE = "https://freehire.me/api/v1"
 ARBEITNOW = "https://www.arbeitnow.com/api/job-board-api"
 SOURCES = {"ba": "Bundesagentur für Arbeit", "freehire": "freehire", "arbeitnow": "Arbeitnow",
-           "indeed": "Indeed", "stepstone": "StepStone", "linkedin": "LinkedIn"}
+           "indeed": "Indeed", "stepstone": "StepStone", "linkedin": "LinkedIn",
+           "jobspy_linkedin": "LinkedIn (JobSpy)", "jobspy_indeed": "Indeed (JobSpy)"}
 FREE_SOURCES = ["ba", "freehire", "arbeitnow"]
+JOBSPY = ["jobspy_indeed", "jobspy_linkedin"]  # free, through the JobSpy library, from this PC
+LINKEDIN_PAUSE = {"until": 0.0}  # after LinkedIn refuses, leave it alone for a while so the block doesn't grow
 # Apify actors (pay per result); these sources need an Apify API token
 APIFY = "https://api.apify.com/v2"
 ACTORS = {"linkedin": "cheap_scraper/linkedin-job-scraper", "indeed": "valig/indeed-jobs-scraper",
@@ -316,6 +320,8 @@ def applied_match(job: dict, sets: list):
 
 def drop_reason(j: dict, applied: list):
     t, c = j["title"].lower(), j["company"].lower()
+    if j["published"] and j["age"] > 31:  # the searches cover a week; this means a source ignored its date filter
+        return "posted over a month ago"
     if "(inaktiv)" in c:
         return "inactive company page"
     if j["agency_flag"] or AGENCY.search(c):
@@ -437,7 +443,21 @@ def parse_posting(page: str) -> tuple:
     return closed, urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("url", [url])[0]
 
 
+def posting_extras(page: str) -> tuple:
+    """(applicant line, description) from LinkedIn's public job page: "Be among the first 25 applicants"."""
+    a = re.search(r"num-applicants__caption[^>]*>(.*?)<", page, re.S)
+    d = re.search(r"show-more-less-html__markup[^>]*>(.*?)</div>", page, re.S)
+    return html.unescape(a.group(1)).strip() if a else "", strip_html(d.group(1)) if d else ""
+
+
+def linkedin_paused() -> bool:
+    return time.time() < LINKEDIN_PAUSE["until"]
+
+
 def linkedin_status(job_id: str) -> tuple:
+    """(status, company apply URL, applicant line, description) from the job's public page."""
+    if linkedin_paused():
+        return "Unconfirmed", None, "", ""
     for attempt in range(3):
         try:
             code, page = fetch(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}")
@@ -449,11 +469,13 @@ def linkedin_status(job_id: str) -> tuple:
             break
         time.sleep(10 * (attempt + 1))  # LinkedIn rate limit: back off, then try again
     if code in (404, 410):
-        return "Closed", None
+        return "Closed", None, "", ""
     if code != 200:
-        return "Unconfirmed", None
+        if code == 429:
+            LINKEDIN_PAUSE["until"] = time.time() + 1800
+        return "Unconfirmed", None, "", ""
     closed, apply_url = parse_posting(page)
-    return ("Closed" if closed else "Verified open"), apply_url
+    return ("Closed" if closed else "Verified open"), apply_url, *posting_extras(page)
 
 
 def apply_check(url: str) -> str:
@@ -512,13 +534,18 @@ def kw_score(text: str, keywords: list) -> int:
     return round(100 * hits / len(keywords)) if keywords else 0
 
 
+def ba_window(days: int) -> int:
+    """The Bundesagentur only filters by 1, 7, 14 or 28 days; any other value returns postings back to 2024."""
+    return next((v for v in (1, 7, 14, 28) if v >= days), 28)
+
+
 def fetch_ba(keywords: list, days: int) -> list:
     """The Bundesagentur für Arbeit's job search, Germany's largest job database. Search results carry no
     description; details adds it for the jobs that get a full read."""
     found = {}
     for kw in keywords:
         for page in (1, 2, 3):
-            q = urllib.parse.urlencode({"was": kw, "veroeffentlichtseit": days, "size": 100, "page": page,
+            q = urllib.parse.urlencode({"was": kw, "veroeffentlichtseit": ba_window(days), "size": 100, "page": page,
                                         "zeitarbeit": "false"})
             rows = (http_json(f"{BA_API}/pc/v6/jobs?{q}", BA_KEY)[1] or {}).get("ergebnisliste") or []
             for x in rows:
@@ -723,6 +750,73 @@ def stepstone_item(x: dict, q: str):
             "salaryInfo": [salary] if salary else [], "jobDescription": desc or x.get("textSnippet") or ""}
 
 
+class _Errors(logging.Handler):
+    """Collects a JobSpy scraper's errors: it logs a refusal instead of raising it."""
+
+    def __init__(self):
+        super().__init__(logging.ERROR)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+LEVELS = {"internship": "Internship", "entry level": "Entry level", "associate": "Associate",
+          "mid-senior level": "Mid-Senior level", "director": "Director", "executive": "Executive"}
+
+
+def jobspy_item(r: dict, q: str):
+    """A JobSpy row in the form the other sources use. The IDs match the Apify searches' ("4481863691",
+    "in-91b28f1bd159b6cc"), so a job found both ways merges into one."""
+    site, rid = r.get("site"), str(r.get("id") or "")
+    if site not in ("linkedin", "indeed") or not rid:
+        return None
+    parts = [p.strip() for p in (r.get("location") or "").split(",") if p.strip()]
+    if site == "indeed" and len(parts) == 3:  # "Ulm, BW, Germany": Indeed abbreviates the state
+        parts[1] = STATE_CODES.get(parts[1], parts[1])
+    lo, hi, unit = r.get("min_amount"), r.get("max_amount"), {"hourly": "hour", "daily": "day", "weekly": "week",
+                                                              "monthly": "month", "yearly": "year"}.get(r.get("interval"), "")
+    salary = (f"{lo:g}" if lo else "") + (f"–{hi:g}" if hi else "") + f" {r.get('currency') or ''} per {unit}" \
+        if lo or hi else ""
+    direct = r.get("job_url_direct") or ""
+    desc = strip_html(r.get("description") or "")
+    if r.get("is_remote"):
+        desc = f"Fully remote ({site.title()} lists this job as remote).\n" + desc
+    return {"jobId": rid.removeprefix("li-") if site == "linkedin" else rid, "source": SOURCES[site],
+            "jobTitle": r.get("title") or "", "companyName": r.get("company") or "",
+            "location": ", ".join(parts) or "Germany", "publishedAt": str(r.get("date_posted") or ""),
+            "experienceLevel": LEVELS.get(str(r.get("job_level") or "").lower(), ""),
+            "contractType": str(r.get("job_type") or ""), "applyType": "EXTERNAL" if site == "indeed" else "",
+            "searchString": f"JobSpy {site}: {q}", "jobUrl": r.get("job_url") or "",
+            "company_url": direct if direct and not JOB_BOARDS.search(direct) else None,
+            "salaryInfo": [salary] if salary else [], "jobDescription": desc}
+
+
+def fetch_jobspy(site: str, days: int, per_query: int) -> list:
+    """LinkedIn or Indeed through the JobSpy library, free: one search per BOARD_QUERIES entry, from this PC.
+    LinkedIn refuses after a few hundred jobs; then the run stops there instead of asking again."""
+    from jobspy import scrape_jobs  # imported here, because it loads pandas, which is slow to start
+    log, caught, found = logging.getLogger(f"jobspy.{site}"), _Errors(), {}
+    log.addHandler(caught)
+    try:
+        for q in BOARD_QUERIES:
+            if site == "linkedin" and linkedin_paused():
+                break
+            df = scrape_jobs(site_name=[site], search_term=q, location="Germany", results_wanted=per_query,
+                             hours_old=days * 24, country_indeed="germany", description_format="html", verbose=0)
+            for r in df.astype(object).where(df.notna(), None).to_dict("records"):
+                x = jobspy_item(r, q)
+                if x:
+                    found.setdefault(x["jobId"], x)
+            if site == "linkedin" and any(re.search(r"blocked|status code 4(?:03|29)", m) for m in caught.messages):
+                LINKEDIN_PAUSE["until"] = time.time() + 1800
+    finally:
+        log.removeHandler(caught)
+    if not found and caught.messages:
+        raise RuntimeError(caught.messages[-1])
+    return list(found.values())
+
+
 def keep_tech(x: dict, cfg: dict) -> bool:
     """Scores a free-source job against his resume keywords; keeps tech jobs whose titles aren't excluded."""
     x["keywordMatchScorePercentage"] = kw_score(x["jobTitle"] + "\n" + x["jobDescription"], cfg["resumeKeywords"])
@@ -730,14 +824,18 @@ def keep_tech(x: dict, cfg: dict) -> bool:
         TECH_TITLE.search(x["jobTitle"].lower()) or x["keywordMatchScorePercentage"] >= 40)
 
 
-def fetch_sources(names: list, days: int, token: str = "", linkedin_max: int = 400, progress=print) -> tuple:
+def fetch_sources(names: list, days: int, token: str = "", linkedin_max: int = 400, progress=print,
+                  jobspy_max: int = 100) -> tuple:
     """(items, counts) from the named sources, searched in parallel. LinkedIn, Indeed and StepStone run on
-    Apify and need a token; LinkedIn's actor filters itself, the others go through keep_tech."""
+    Apify and need a token; LinkedIn's actor filters itself, the others go through keep_tech. jobspy_max is
+    how many LinkedIn jobs a free JobSpy run asks for."""
     cfg = json.loads((SKILL / "search_input.json").read_text(encoding="utf-8"))
     run = {"ba": lambda: fetch_ba(cfg["keyword"], days), "freehire": lambda: fetch_freehire(days),
            "arbeitnow": lambda: fetch_arbeitnow(days), "indeed": lambda: fetch_board("indeed", token, days),
            "stepstone": lambda: fetch_board("stepstone", token, days),
-           "linkedin": lambda: fetch_linkedin(cfg, token, days, linkedin_max)}
+           "linkedin": lambda: fetch_linkedin(cfg, token, days, linkedin_max),
+           "jobspy_indeed": lambda: fetch_jobspy("indeed", days, 40),
+           "jobspy_linkedin": lambda: fetch_jobspy("linkedin", days, max(5, jobspy_max // len(BOARD_QUERIES)))}
 
     def one(name):
         if name in ACTORS and not token:
@@ -851,8 +949,11 @@ def check(jobs: dict, ids: list, progress=None):
         if progress:
             progress(n, len(ids))
         if src == "LinkedIn":
-            j["status"], j["apply_url"] = linkedin_status(i)
-            time.sleep(1.2)  # stay well below LinkedIn's rate limit
+            j["status"], j["apply_url"], applicants, desc = linkedin_status(i)
+            # JobSpy's LinkedIn results come without these; Apify's carry them already
+            j["applicants"], j["description"] = applicants or j.get("applicants") or "", j["description"] or desc
+            if not linkedin_paused():
+                time.sleep(1.2)  # stay well below LinkedIn's rate limit
         elif src == SOURCES["ba"]:
             j["status"], desc = ba_details(j["ref"])
             j["description"], j["apply_url"] = j["description"] or desc, None
@@ -1088,6 +1189,22 @@ def selftest():
             'url=https%3A%2F%2Fjobs%2Eexample%2Ede%2F42&amp;urlHash=x"--></code>')
     assert parse_posting(page) == (False, "https://jobs.example.de/42")
     assert parse_posting('<figure class="closed-job">No longer accepting applications</figure>')[0]
+    assert [ba_window(d) for d in (1, 2, 7, 8, 30)] == [1, 7, 7, 14, 28]
+    assert posting_extras('<figcaption class="num-applicants__caption">\n  Be among the first 25 applicants\n</figcaption>'
+                          '<div class="show-more-less-html__markup">\n<p>Python &amp; SQL</p><ul><li>Data</li></ul></div>') \
+        == ("Be among the first 25 applicants", "Python & SQL\nData")
+    li = jobspy_item({"site": "linkedin", "id": "li-4481863691", "title": "Werkstudent Data (m/w/d)", "company": "FERI",
+                      "location": "Bad Homburg, Hesse, Germany", "date_posted": dt.date(2026, 10, 27),
+                      "job_url": "https://www.linkedin.com/jobs/view/4481863691", "is_remote": False}, "q")
+    assert li["jobId"] == "4481863691" and li["source"] == "LinkedIn" and li["publishedAt"] == "2026-10-27"
+    assert to_job(li, dt.date(2026, 10, 28))["linkedin"] == "https://www.linkedin.com/jobs/view/4481863691/"
+    ind = jobspy_item({"site": "indeed", "id": "in-91b2", "title": "Werkstudent", "company": "Feri",
+                       "location": "Ulm, BW, Germany", "min_amount": 18.0, "interval": "hourly", "currency": "EUR",
+                       "job_url_direct": "https://jobdb.softgarden.de/x", "description": "<p>Wir</p><p>suchen</p>",
+                       "is_remote": True}, "q")
+    assert ind["jobId"] == "in-91b2" and ind["location"] == "Ulm, Baden-Württemberg, Germany"
+    assert ind["salaryInfo"] == ["18 EUR per hour"] and ind["company_url"] == "https://jobdb.softgarden.de/x"
+    assert ind["jobDescription"] == "Fully remote (Indeed lists this job as remote).\nWir\nsuchen"
     assert english_state("NORDRHEIN_WESTFALEN") == "North Rhine-Westphalia" and english_state("Thüringen") == "Thuringia"
     assert german_location("Gilching", "Bayern") == "Gilching, Bavaria, Germany" and english_state("Munich") == ""
     assert german_location("Berlin") == "Berlin, Berlin, Germany" and place(german_location("Berlin")) == "Berlin"
