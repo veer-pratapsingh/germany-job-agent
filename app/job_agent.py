@@ -34,13 +34,17 @@ NPM = Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules"
 DEFAULTS = {"apify_token": "", "linkedin": True, "indeed": True, "stepstone": True, "linkedin_max": 400,
             "check_top": 60, "parallel": 3, "claude_model": "sonnet", "claude_effort": "medium",
             "codex_model": "", "codex_effort": "medium", "sort": "best",
-            "jobspy": True, "jobspy_max": 100, "auto_hours": 3, "alert_score": 65}
+            "jobspy": True, "jobspy_max": 100, "auto_hours": 3, "alert_score": 65,
+            "deepseek_key": "", "deepseek_model": "deepseek-flash"}
+SECRETS = ("apify_token", "deepseek_key")  # kept on this PC only, and never sent to the page
+ENGINES = {"claude": "Claude", "codex": "Codex", "deepseek": "DeepSeek"}
+DEEPSEEK = "https://api.deepseek.com"
 TASK = "Germany Job Agent check"  # the Windows scheduled task that checks the free sources while the app is closed
 KEEP_DAYS = 21  # jobs not seen again for this long leave the list, unless he applied or built something for them
 CHECK_FIELDS = ("status", "apply_url", "apply_check", "checked", "snippets", "workplace_hint", "lang", "domain")
 ACTIVE = ("analyzing", "building")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console window flashing up for each engine run
-LIMIT_HINT = re.compile(r"\b(?:limits?|quota|usage|credits?|429|overloaded)\b", re.I)
+LIMIT_HINT = re.compile(r"\b(?:limits?|quota|usage|credits?|balance|402|429|overloaded)\b", re.I)
 TABLE_END = re.compile(r"^\|.*\n(?!\|)", re.M)  # the last row of a markdown table
 RUNNING = set()  # engine processes, so closing the app can stop them
 CLOSING = threading.Event()
@@ -289,13 +293,15 @@ def load_settings() -> dict:
 
 
 def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bool = False) -> list:
-    """The command for a CV run, or with light=True for a translation: a small, fast model with no tools."""
-    if engine == "claude":
+    """The command for a CV run, or with light=True for a translation: a small, fast model with no tools.
+    DeepSeek runs inside Claude Code, through DeepSeek's Anthropic-compatible API (see deepseek_env)."""
+    if engine in ("claude", "deepseek"):
         exe = NPM / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
         claude = str(exe) if exe.exists() else shutil.which("claude") or "claude"
+        ds = engine == "deepseek"
         if light:  # Sonnet at low effort: Haiku thought through 15-25k tokens per posting and took twice as long
-            return [claude, "-p", "--output-format", "json", "--model", "sonnet", "--effort", "low", "--tools", "",
-                    "--strict-mcp-config",
+            return [claude, "-p", "--output-format", "json", "--model", s["deepseek_model"] if ds else "sonnet",
+                    "--effort", "low", "--tools", "", "--strict-mcp-config",
                     "--disable-slash-commands", "--no-session-persistence",
                     "--system-prompt", "You translate German job postings into clear English."]
         rules = DATA / "claude-permissions.json"  # only file edits and the PDF tools, nothing else
@@ -303,8 +309,8 @@ def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bo
             "Read", "Edit", "Write", "Glob", "Grep", "Bash(python .claude/skills/job-apply/scripts/build_cv.py:*)",
             "Bash(pdftoppm:*)", "Bash(pdftotext:*)", "PowerShell(python .claude/skills/job-apply/scripts/build_cv.py:*)",
             "PowerShell(pdftoppm:*)"]}}), encoding="utf-8")
-        return [claude, "-p", "--output-format", "json", "--model", s["claude_model"], "--effort", s["claude_effort"],
-                "--permission-mode", "acceptEdits", "--settings", str(rules)]
+        return [claude, "-p", "--output-format", "json", "--model", f"{s['deepseek_model']}[1m]" if ds else s["claude_model"],
+                "--effort", "high" if ds else s["claude_effort"], "--permission-mode", "acceptEdits", "--settings", str(rules)]
     js = NPM / "@openai" / "codex" / "bin" / "codex.js"
     cmd = [shutil.which("node") or "node", str(js)] if js.exists() else [shutil.which("codex") or "codex"]
     if light:
@@ -322,23 +328,57 @@ def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bo
     return cmd + (["--output-schema", str(schema)] if schema else []) + ["-"]
 
 
+def deepseek_env(s: dict) -> dict:
+    """Points Claude Code at DeepSeek, with the settings from DeepSeek's own Claude Code guide. The key goes in the
+    environment, so it never shows in a command line or a log."""
+    m = s["deepseek_model"]
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # it would win over the token
+    env.update(ANTHROPIC_BASE_URL=f"{DEEPSEEK}/anthropic", ANTHROPIC_AUTH_TOKEN=s["deepseek_key"],
+               ANTHROPIC_MODEL=f"{m}[1m]", ANTHROPIC_DEFAULT_OPUS_MODEL=f"{m}[1m]",
+               ANTHROPIC_DEFAULT_SONNET_MODEL=f"{m}[1m]", ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash",
+               CLAUDE_CODE_SUBAGENT_MODEL="deepseek-flash", CLAUDE_CODE_AUTO_COMPACT_WINDOW="786432")
+    return env
+
+
+def deepseek_balance(key: str) -> tuple:
+    """(usable?, message) from DeepSeek's balance endpoint, which costs nothing. Claude Code keeps retrying a
+    rejected key for minutes, so every DeepSeek run checks this first."""
+    code, d = jobs.http_json(f"{DEEPSEEK}/user/balance", {"Authorization": f"Bearer {key}"})
+    if code != 200 or not d:
+        return False, (f"DeepSeek didn't accept the key (HTTP {code}). Check it in Settings." if code == 401
+                       else f"DeepSeek didn't answer (HTTP {code}).")
+    b = (d.get("balance_infos") or [{}])[0]
+    money = f"{b.get('total_balance', '?')} {b.get('currency', '')}".strip()
+    if not d.get("is_available"):
+        return False, f"Your DeepSeek balance ({money}) is too low to run. Top it up on platform.deepseek.com."
+    return True, f"Key works. Balance: {money}."
+
+
 def stop(p: subprocess.Popen):
     """Ends an engine run together with everything it started (shells, pdflatex)."""
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
 
 
 def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path = None, light: bool = False) -> tuple:
-    """(ok, reply): runs Claude Code or Codex headless in the project folder (a translation: outside it), with the
-    prompt on stdin."""
+    """(ok, reply): runs Claude Code, Codex or DeepSeek (in Claude Code) headless in the project folder (a
+    translation: outside it), with the prompt on stdin."""
     closed = (False, "Stopped because the app was closed.")
     if CLOSING.is_set():
         return closed
+    s = load_settings()
+    if engine == "deepseek":
+        if not s["deepseek_key"]:
+            return False, "Add your DeepSeek API key in Settings first."
+        usable, message = deepseek_balance(s["deepseek_key"])
+        if not usable:
+            return False, message
     reply = log.with_suffix(".reply.txt")
-    cmd = engine_cmd(engine, load_settings(), reply, schema, light)
+    cmd = engine_cmd(engine, s, reply, schema, light)
     LIGHT.mkdir(exist_ok=True)
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             encoding="utf-8", errors="replace", cwd=LIGHT if light else PROJECT, creationflags=NO_WINDOW)
+                             encoding="utf-8", errors="replace", cwd=LIGHT if light else PROJECT, creationflags=NO_WINDOW,
+                             env=deepseek_env(s) if engine == "deepseek" else None)
     except OSError as e:
         return False, f"couldn't start {engine}: {e}"
     RUNNING.add(p)
@@ -356,11 +396,11 @@ def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path =
                    encoding="utf-8")
     if CLOSING.is_set():
         return closed
-    if engine == "claude":
+    if engine in ("claude", "deepseek"):
         try:
             env = json.loads(out[out.find("{"):])
         except ValueError:
-            return False, (err or out).strip()[-600:] or f"Claude exited with code {p.returncode}"
+            return False, (err or out).strip()[-600:] or f"{ENGINES[engine]} exited with code {p.returncode}"
         return env.get("subtype") == "success" and not env.get("is_error"), str(env.get("result") or "").strip()
     text = reply.read_text(encoding="utf-8", errors="replace").strip() if reply.exists() else ""
     return p.returncode == 0 and bool(text), text or err.strip()[-600:] or f"Codex exited with code {p.returncode}"
@@ -493,13 +533,13 @@ class Agent:
 
     def translate(self, job_id: str, engine: str):
         """Translates a German posting with the engine he picked. The translation is kept with the job."""
-        if engine in ("claude", "codex") and job_id in self._store.data["jobs"] and job_id not in self._translating:
+        if engine in ENGINES and job_id in self._store.data["jobs"] and job_id not in self._translating:
             self._translating[job_id] = engine
             threading.Thread(target=self._translate, args=(job_id, engine), daemon=True).start()
 
     def create(self, job_id: str, engine: str):
         """Starts an application: the engine reads the posting first and lists the skills to ask him about."""
-        if engine not in ("claude", "codex"):
+        if engine not in ENGINES:
             return
         with self._store.lock:
             builds = self._store.data["jobs"][job_id].setdefault("builds", [])
@@ -548,16 +588,21 @@ class Agent:
 
     def get_settings(self) -> dict:
         s = load_settings()
-        return {**{k: v for k, v in s.items() if k != "apify_token"}, "token_set": bool(s["apify_token"])}
+        return {**{k: v for k, v in s.items() if k not in SECRETS}, "token_set": bool(s["apify_token"]),
+                "deepseek_set": bool(s["deepseek_key"])}
 
     def save_settings(self, values: dict):
         s = load_settings()
         hours = s["auto_hours"]
-        s.update({k: type(DEFAULTS[k])(v) for k, v in values.items() if k in DEFAULTS and (k != "apify_token" or v)})
+        s.update({k: type(DEFAULTS[k])(v) for k, v in values.items() if k in DEFAULTS and (k not in SECRETS or v)})
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         CONFIG.write_text(json.dumps(s, indent=1), encoding="utf-8")
         if s["auto_hours"] != hours:
             threading.Thread(target=schedule, args=(s["auto_hours"],), daemon=True).start()
+
+    def test_deepseek(self, key: str) -> str:
+        """Checks the key against DeepSeek's balance endpoint, which costs nothing."""
+        return deepseek_balance(key or load_settings()["deepseek_key"])[1]
 
     def test_apify(self, token: str) -> str:
         try:
@@ -794,7 +839,7 @@ class Agent:
             files += [{"label": "Report", "path": str(folder / "Report.md")}]
             today = dt.date.today()
             row = (f"| {cell(j['company'])}, {cell(j['title'])} application set | `{rel}/` | Built {today.day} "
-                   f"{today:%b %Y} in {a['language']} with {b['engine'].title()} in the desktop app. Confirmed: "
+                   f"{today:%b %Y} in {a['language']} with {ENGINES[b['engine']]} in the desktop app. Confirmed: "
                    f"{cell(', '.join(a['have'])) or 'none'}; not used: {cell(', '.join(a['lack'])) or 'none'}. |\n")
             with self._profile_lock:
                 PROFILE.write_text(insert_rows(PROFILE.read_text(encoding="utf-8"), "## 14.", row), encoding="utf-8")
@@ -896,6 +941,20 @@ def selftest():
     claude, codex = (engine_cmd(e, DEFAULTS, Path("r.txt"), light=True) for e in ("claude", "codex"))
     assert claude[claude.index("--model") + 1] == "sonnet" and claude[claude.index("--tools") + 1] == ""
     assert codex[codex.index("-s") + 1] == "read-only" and codex[codex.index("-C") + 1] == str(LIGHT)
+    ds_settings = {**DEFAULTS, "deepseek_key": "sk-selftest"}
+    ds = engine_cmd("deepseek", ds_settings, Path("r.txt"))
+    assert ds[ds.index("--model") + 1] == "deepseek-flash[1m]" and "sk-selftest" not in " ".join(ds)
+    env = deepseek_env(ds_settings)
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic" and env["ANTHROPIC_AUTH_TOKEN"] == "sk-selftest"
+    global CONFIG
+    real, CONFIG = CONFIG, DATA / "selftest-settings.json"
+    CONFIG.write_text(json.dumps({"deepseek_key": "sk-selftest", "apify_token": "t"}), encoding="utf-8")
+    try:
+        shown = Agent(Store(DATA / "selftest-db2.json")).get_settings()
+        assert not set(SECRETS) & set(shown) and shown["deepseek_set"] and shown["token_set"]
+    finally:
+        CONFIG.unlink()
+        CONFIG = real
     print("selftest ok")
 
 

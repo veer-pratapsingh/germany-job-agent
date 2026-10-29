@@ -1,6 +1,6 @@
 # Germany Job Agent
 
-A Windows desktop app that finds new tech jobs in Germany each time you press "Check for new jobs". With one click, it also writes a tailored CV, cover letter and interview-prep plan for any of them, using Claude Code or Codex. You pick the engine per job.
+A Windows desktop app that finds new tech jobs in Germany each time you press "Check for new jobs". With one click, it also writes a tailored CV, cover letter and interview-prep plan for any of them, using Claude Code, Codex or DeepSeek. You pick the engine per job.
 
 It covers working-student (Werkstudent), internship, master's-thesis, research-assistant (HiWi), trainee and junior roles in every tech domain, in English and German postings.
 
@@ -43,13 +43,13 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
   - hours, language, salary and start date
   - the full text
 
-- **Builds the application** with the engine you pick (Claude Code or Codex):
+- **Builds the application** with the engine you pick (Claude Code, Codex, or DeepSeek running inside Claude Code):
   1. The engine reads the posting and your profile, then lists the skills the posting wants that your profile doesn't show.
   2. You tick the ones you've really used. Unticked skills stay off the CV and go into the prep plan.
   3. It writes the CV, the cover letter and the prep plan into `applications/<date>_<Company>_<Role>_<engine>/`.
   4. It compiles and checks the PDFs.
 
-  Several builds can run at the same time. If one fails, for example because the engine hit its usage limit, the app offers "Retry with" the other engine.
+  Several builds can run at the same time. If one fails, for example because the engine hit its usage limit, the app offers "Retry with" each of the other engines.
 
 - **Checks every PDF before you upload it:**
   - the page count
@@ -64,6 +64,7 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
 - MiKTeX or TeX Live, for `pdflatex`.
 - Poppler, for `pdftotext` and `pdftoppm`.
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) and/or the [Codex CLI](https://github.com/openai/codex), installed and signed in.
+- Optional: a [DeepSeek API key](https://platform.deepseek.com/api_keys) with some balance, for the DeepSeek engine. It runs inside Claude Code through DeepSeek's Anthropic-compatible API, so Claude Code must be installed (not necessarily signed in). Paste the key under **Settings**; **Test** shows your balance. DeepSeek's servers are in China, and a CV run sends them the posting and your full profile.
 - Optional: an [Apify](https://apify.com) account for LinkedIn, Indeed and StepStone. The free plan includes $5 of credit a month.
 
 ## Setup

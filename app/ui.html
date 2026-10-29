@@ -210,6 +210,15 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
       <div class="field"><label for="s-xeffort">Codex effort</label>
         <select id="s-xeffort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></div>
     </div>
+    <div class="field">
+      <label for="s-dskey">DeepSeek API key</label>
+      <div class="row"><input type="password" id="s-dskey" style="flex:1" placeholder="Paste your key" autocomplete="off">
+        <button type="button" id="s-dstest">Test</button></div>
+      <small id="s-dsresult"></small>
+      <small>For the DeepSeek engine, which runs inside Claude Code. It's billed per use from your DeepSeek balance, usually a few cents per CV with Flash. DeepSeek's servers are in China: a CV run sends them the posting and your full profile, including your address and date of birth.</small>
+    </div>
+    <div class="field"><label for="s-dsmodel">DeepSeek model</label>
+      <select id="s-dsmodel"><option value="deepseek-flash">Flash (fast, cheapest)</option><option value="deepseek-v4-pro">V4 Pro (stronger, about 3–4× the price)</option></select></div>
     <div class="field"><label for="s-par">CVs built at the same time</label><input type="number" id="s-par" min="1" max="6" style="width:100px">
       <small>Takes effect when you restart the app</small></div>
   </form>
@@ -227,7 +236,7 @@ let limit = PAGE;
 const STATUS = {"Verified open": ["good", "Open"], "Listed today": ["acc", "Listed today"], "Unconfirmed": ["", "Unconfirmed"], "Closed": ["bad", "Closed"]};
 const BUILD = {analyzing: ["acc", "Reading posting…"], questions: ["warn", "Needs your answers"], building: ["acc", "Writing CV…"],
                done: ["good", "CV ready"], failed: ["bad", "Build failed"]};
-const ENGINE = {claude: "Claude", codex: "Codex"};
+const ENGINE = {claude: "Claude", codex: "Codex", deepseek: "DeepSeek"};
 
 function scoreClass(s) { return s >= 75 ? "hi" : s >= 55 ? "mid" : ""; }
 function statusTag(st) { const [c, t] = STATUS[st] || ["", st || "Not checked"]; return `<span class="tag ${c}">${esc(t)}</span>`; }
@@ -270,7 +279,6 @@ function fact(label, value) { return value ? `<div><span>${label}</span>${esc(va
 
 function buildBox(j) {
   const b = (j.builds || []).slice(-1)[0];
-  const other = b && b.engine === "claude" ? "codex" : "claude";
   const picker = `<div class="engine" role="group" aria-label="Engine">
       ${Object.entries(ENGINE).map(([k, v]) => `<button type="button" data-engine="${k}" aria-pressed="${engine === k}">${v}</button>`).join("")}</div>`;
   let body = "";
@@ -297,7 +305,8 @@ function buildBox(j) {
   }
   if (b && b.state === "failed") {
     body += `<div class="msg bad">${ENGINE[b.engine]} stopped: ${esc(b.message || "unknown error")}</div>
-      <div class="files"><button data-act="retry" data-engine-to="${other}">Retry with ${ENGINE[other]}</button>
+      <div class="files">${Object.keys(ENGINE).filter(e => e !== b.engine).map(e =>
+        `<button data-act="retry" data-engine-to="${e}">Retry with ${ENGINE[e]}</button>`).join("")}
       ${b.log ? `<button class="ghost" data-open="${esc(b.log)}">Open log</button>` : ""}</div>`;
   }
   return `<div class="box"><h4>Application</h4>${body}</div>`;
@@ -424,6 +433,10 @@ function bind() {
   $("#btn-settings").addEventListener("click", openSettings);
   $("#s-cancel").addEventListener("click", () => $("#settings").close());
   $("#s-save").addEventListener("click", saveSettings);
+  $("#s-dstest").addEventListener("click", async () => {
+    $("#s-dsresult").textContent = "Checking…";
+    $("#s-dsresult").textContent = await api.test_deepseek($("#s-dskey").value.trim());
+  });
   $("#s-test").addEventListener("click", async () => {
     $("#s-token-note").textContent = "Checking…";
     $("#s-token-note").textContent = await api.test_apify($("#s-token").value);
@@ -437,6 +450,8 @@ async function openSettings() {
   $("#s-limax").value = s.linkedin_max; $("#s-top").value = s.check_top; $("#s-par").value = s.parallel;
   $("#s-cmodel").value = s.claude_model; $("#s-ceffort").value = s.claude_effort;
   $("#s-xmodel").value = s.codex_model; $("#s-xeffort").value = s.codex_effort;
+  $("#s-dskey").value = ""; $("#s-dskey").placeholder = s.deepseek_set ? "Saved (paste a new one to replace it)" : "Paste your key";
+  $("#s-dsmodel").value = s.deepseek_model; $("#s-dsresult").textContent = "";
   $("#s-jobspy").checked = s.jobspy; $("#s-jsmax").value = s.jobspy_max; $("#s-auto").value = s.auto_hours; $("#s-alert").value = s.alert_score;
   $("#settings").showModal();
 }
@@ -445,6 +460,7 @@ async function saveSettings() {
     indeed: $("#s-indeed").checked, stepstone: $("#s-stepstone").checked, linkedin_max: +$("#s-limax").value || 400,
     check_top: +$("#s-top").value || 60, parallel: +$("#s-par").value || 3, claude_model: $("#s-cmodel").value,
     claude_effort: $("#s-ceffort").value, codex_model: $("#s-xmodel").value.trim(), codex_effort: $("#s-xeffort").value,
+    deepseek_key: $("#s-dskey").value.trim(), deepseek_model: $("#s-dsmodel").value,
     jobspy: $("#s-jobspy").checked, jobspy_max: +$("#s-jsmax").value || 100, auto_hours: Math.max(0, +$("#s-auto").value || 0),
     alert_score: Math.max(0, +$("#s-alert").value || 0)});
   $("#settings").close();
