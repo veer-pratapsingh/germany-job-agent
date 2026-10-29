@@ -66,7 +66,7 @@ Veer decides what goes on his CV. Before writing anything, ask him about the pos
 4. **Ask about the "To ask" items** (see above), wait for the answers, and update the profile: confirmed skills into section 7, declined ones into section 16.
 
 5. **Write the CV.**
-   - **Header, second line:** the posting's job title · `M.Sc.\ Data and Knowledge Engineering Student`.
+   - **Header:** show Veer's name and plain-text contact details only; do not add a job-title/degree tagline below his name.
    - **Summary (5–7 lines):** lead with the strongest evidence for the posting's top three needs. Mention the schubKI Founders' Award when the role values AI or innovation.
    - **Skills:** 4–5 groups in the posting's order of priority and in its terms, with supported and confirmed skills only.
    - **Experience:** Swaja Robotics, then talk2move, then UMUN Tech. Pick and reword bullets from the profile's bullet pool to match the posting's tasks, and keep every number exactly as the profile states it. Confirmed skills only go into a bullet if Veer said he used them in that job.
@@ -124,6 +124,7 @@ Veer decides what goes on his CV. Before writing anything, ask him about the pos
 - Ask before adding any skill that isn't in his profile. Confirmed skills go on the CV normally; declined skills stay off. No "Currently learning" line.
 - Projects as paragraphs, not bullets; no dates and no team or university labels in project titles on the CV.
 - Only the relevant details: concise beats exhaustive.
+- CV header: show the name and contact details only. Do not add a role-title or degree tagline below the name, including on tailored CVs.
 - No availability line and no semester count on the CV. The cover letter may state the start date and hours.
 - Swaja Robotics location is just "India".
 - UMUN Tech: Technology Intern, Jul 2023 – Apr 2024, framed as full-stack web development, without "99% uptime".
