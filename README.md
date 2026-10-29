@@ -65,6 +65,8 @@ It covers working-student (Werkstudent), internship, master's-thesis, research-a
 - Poppler, for `pdftotext` and `pdftoppm`.
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) and/or the [Codex CLI](https://github.com/openai/codex), installed and signed in.
 - Optional: a [DeepSeek API key](https://platform.deepseek.com/api_keys) with some balance, for the DeepSeek engine. It runs inside Claude Code through DeepSeek's Anthropic-compatible API, so Claude Code must be installed (not necessarily signed in). Paste the key under **Settings**; **Test** shows your balance. DeepSeek's servers are in China, and a CV run sends them the posting and your full profile.
+- Optional: Google's [Antigravity CLI](https://antigravity.google/download) (`agy`), for translating German postings. It's free with a Google account within a weekly quota. Sign in once by running `agy`; `agy models` lists your models.
+  - It doesn't build CVs. On a free account its background mode blocks the small scripts its model writes and then stops, and the sandboxed auto mode that would allow them isn't available.
 - Optional: an [Apify](https://apify.com) account for LinkedIn, Indeed and StepStone. The free plan includes $5 of credit a month.
 
 ## Setup
@@ -93,7 +95,7 @@ To use the app for someone else, change those names in `app/job_agent.py` and `.
    - Each job shows how long ago it was posted: to the minute where the source gives a time (freehire, Arbeitnow, StepStone, Indeed and fresh LinkedIn jobs), otherwise to the day.
    - The list shows 200 jobs at a time; **Show more** adds the next 200.
 4. Open a job, pick **Claude** or **Codex**, and press **Create CV + cover letter**.
-   - For a German posting, **Translate to English** translates it with the engine you picked: about 15 seconds with Codex, under a minute with Claude. The translation is kept with the job.
+   - For a German posting, **Translate to English** translates it with the engine you picked: about 15 seconds with Codex, about 25 with Antigravity, under a minute with Claude. The translation is kept with the job.
 5. Answer the skill questions. The finished files open from the job's panel.
 6. After applying, press **Mark as applied**. The job moves to the **Applied** tab, which lists your applications with the date, newest first.
 

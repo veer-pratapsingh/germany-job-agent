@@ -219,6 +219,9 @@ dialog::backdrop { background: rgba(10, 12, 16, .45); }
     </div>
     <div class="field"><label for="s-dsmodel">DeepSeek model</label>
       <select id="s-dsmodel"><option value="deepseek-flash">Flash (fast, cheapest)</option><option value="deepseek-v4-pro">V4 Pro (stronger, about 3–4× the price)</option></select></div>
+    <div class="field"><label for="s-agmodel">Antigravity model</label>
+      <input type="text" id="s-agmodel" placeholder="gemini-3.8-flash-high">
+      <small>For translations with Google's Antigravity CLI (agy), free with your Google account within a weekly quota. Type <code>agy models</code> in a terminal to see the models your plan has.</small></div>
     <div class="field"><label for="s-par">CVs built at the same time</label><input type="number" id="s-par" min="1" max="6" style="width:100px">
       <small>Takes effect when you restart the app</small></div>
   </form>
@@ -236,7 +239,7 @@ let limit = PAGE;
 const STATUS = {"Verified open": ["good", "Open"], "Listed today": ["acc", "Listed today"], "Unconfirmed": ["", "Unconfirmed"], "Closed": ["bad", "Closed"]};
 const BUILD = {analyzing: ["acc", "Reading posting…"], questions: ["warn", "Needs your answers"], building: ["acc", "Writing CV…"],
                done: ["good", "CV ready"], failed: ["bad", "Build failed"]};
-const ENGINE = {claude: "Claude", codex: "Codex", deepseek: "DeepSeek"};
+const ENGINE = {claude: "Claude", codex: "Codex", deepseek: "DeepSeek", antigravity: "Antigravity"};
 
 function scoreClass(s) { return s >= 75 ? "hi" : s >= 55 ? "mid" : ""; }
 function statusTag(st) { const [c, t] = STATUS[st] || ["", st || "Not checked"]; return `<span class="tag ${c}">${esc(t)}</span>`; }
@@ -283,7 +286,8 @@ function buildBox(j) {
       ${Object.entries(ENGINE).map(([k, v]) => `<button type="button" data-engine="${k}" aria-pressed="${engine === k}">${v}</button>`).join("")}</div>`;
   let body = "";
   if (!b || b.state === "done" || b.state === "failed") {
-    body = `<div class="row">${picker}<button class="primary" data-act="create">${b ? "Create another version" : "Create CV + cover letter"}</button></div>
+    body = `<div class="row">${picker}<button class="primary" data-act="create"${engine === "antigravity" ? " disabled" : ""}>${b ? "Create another version" : "Create CV + cover letter"}</button></div>
+      ${engine === "antigravity" ? `<p class="note">Antigravity can translate postings, but not build CVs on your account: in background mode it blocks the small scripts its model writes and stops. Pick Claude, Codex or DeepSeek to build.</p>` : ""}
       <p class="note">It reads the posting, asks you about any skills your profile doesn't show yet, then writes the CV, cover letter and prep plan.</p>`;
   }
   if (b && b.state === "analyzing") body = `<div class="row"><div class="spinner"></div>${ENGINE[b.engine]} is reading the posting and your profile…</div>`;
@@ -305,7 +309,7 @@ function buildBox(j) {
   }
   if (b && b.state === "failed") {
     body += `<div class="msg bad">${ENGINE[b.engine]} stopped: ${esc(b.message || "unknown error")}</div>
-      <div class="files">${Object.keys(ENGINE).filter(e => e !== b.engine).map(e =>
+      <div class="files">${Object.keys(ENGINE).filter(e => e !== b.engine && e !== "antigravity").map(e =>
         `<button data-act="retry" data-engine-to="${e}">Retry with ${ENGINE[e]}</button>`).join("")}
       ${b.log ? `<button class="ghost" data-open="${esc(b.log)}">Open log</button>` : ""}</div>`;
   }
@@ -451,7 +455,7 @@ async function openSettings() {
   $("#s-cmodel").value = s.claude_model; $("#s-ceffort").value = s.claude_effort;
   $("#s-xmodel").value = s.codex_model; $("#s-xeffort").value = s.codex_effort;
   $("#s-dskey").value = ""; $("#s-dskey").placeholder = s.deepseek_set ? "Saved (paste a new one to replace it)" : "Paste your key";
-  $("#s-dsmodel").value = s.deepseek_model; $("#s-dsresult").textContent = "";
+  $("#s-dsmodel").value = s.deepseek_model; $("#s-dsresult").textContent = ""; $("#s-agmodel").value = s.antigravity_model;
   $("#s-jobspy").checked = s.jobspy; $("#s-jsmax").value = s.jobspy_max; $("#s-auto").value = s.auto_hours; $("#s-alert").value = s.alert_score;
   $("#settings").showModal();
 }
@@ -461,6 +465,7 @@ async function saveSettings() {
     check_top: +$("#s-top").value || 60, parallel: +$("#s-par").value || 3, claude_model: $("#s-cmodel").value,
     claude_effort: $("#s-ceffort").value, codex_model: $("#s-xmodel").value.trim(), codex_effort: $("#s-xeffort").value,
     deepseek_key: $("#s-dskey").value.trim(), deepseek_model: $("#s-dsmodel").value,
+    antigravity_model: $("#s-agmodel").value.trim() || "gemini-3.8-flash-high",
     jobspy: $("#s-jobspy").checked, jobspy_max: +$("#s-jsmax").value || 100, auto_hours: Math.max(0, +$("#s-auto").value || 0),
     alert_score: Math.max(0, +$("#s-alert").value || 0)});
   $("#settings").close();

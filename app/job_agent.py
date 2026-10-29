@@ -35,9 +35,13 @@ DEFAULTS = {"apify_token": "", "linkedin": True, "indeed": True, "stepstone": Tr
             "check_top": 60, "parallel": 3, "claude_model": "sonnet", "claude_effort": "medium",
             "codex_model": "", "codex_effort": "medium", "sort": "best",
             "jobspy": True, "jobspy_max": 100, "auto_hours": 3, "alert_score": 65,
-            "deepseek_key": "", "deepseek_model": "deepseek-flash"}
+            "deepseek_key": "", "deepseek_model": "deepseek-flash", "antigravity_model": "gemini-3.8-flash-high"}
 SECRETS = ("apify_token", "deepseek_key")  # kept on this PC only, and never sent to the page
-ENGINES = {"claude": "Claude", "codex": "Codex", "deepseek": "DeepSeek"}
+ENGINES = {"claude": "Claude", "codex": "Codex", "deepseek": "DeepSeek", "antigravity": "Antigravity"}
+# Antigravity only translates: on a free account, headless agy blocks the scripts its model writes while building a
+# CV and then stops, and its sandboxed auto mode isn't available
+BUILD_ENGINES = ("claude", "codex", "deepseek")
+AGY = Path(os.environ.get("LOCALAPPDATA", "")) / "agy" / "bin" / "agy.exe"  # Google's Antigravity CLI
 DEEPSEEK = "https://api.deepseek.com"
 TASK = "Germany Job Agent check"  # the Windows scheduled task that checks the free sources while the app is closed
 KEEP_DAYS = 21  # jobs not seen again for this long leave the list, unless he applied or built something for them
@@ -292,9 +296,16 @@ def load_settings() -> dict:
         return dict(DEFAULTS)
 
 
-def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bool = False) -> list:
+def engine_cmd(engine: str, s: dict, reply: Path, schema: Path = None, light: bool = False, task: Path = None,
+               timeout: int = 2400, prompt: str = "") -> list:
     """The command for a CV run, or with light=True for a translation: a small, fast model with no tools.
-    DeepSeek runs inside Claude Code, through DeepSeek's Anthropic-compatible API (see deepseek_env)."""
+    DeepSeek runs inside Claude Code, through DeepSeek's Anthropic-compatible API (see deepseek_env).
+    Antigravity only translates (see BUILD_ENGINES). It takes the prompt as an argument; one too long for a Windows
+    command line goes in the task file."""
+    if engine == "antigravity":
+        ask = prompt if len(prompt) < 20000 else f"Read the file {task.name} in this folder and do exactly what it says."
+        return [str(AGY) if AGY.exists() else shutil.which("agy") or "agy", "-p", ask, "--output-format", "json",
+                "--model", s["antigravity_model"], "--print-timeout", f"{timeout // 60}m"]
     if engine in ("claude", "deepseek"):
         exe = NPM / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
         claude = str(exe) if exe.exists() else shutil.which("claude") or "claude"
@@ -373,8 +384,11 @@ def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path =
         if not usable:
             return False, message
     reply = log.with_suffix(".reply.txt")
-    cmd = engine_cmd(engine, s, reply, schema, light)
     LIGHT.mkdir(exist_ok=True)
+    task = (LIGHT / log.with_suffix(".task.md").name) if light else log.with_suffix(".task.md")
+    if engine == "antigravity" and len(prompt) >= 20000:  # too long for its command line: it reads this file instead
+        task.write_text(prompt, encoding="utf-8")
+    cmd = engine_cmd(engine, s, reply, schema, light, task, timeout, prompt)
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              encoding="utf-8", errors="replace", cwd=LIGHT if light else PROJECT, creationflags=NO_WINDOW,
@@ -385,7 +399,7 @@ def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path =
     if CLOSING.is_set():
         stop(p)
     try:
-        out, err = p.communicate(prompt, timeout=timeout)
+        out, err = p.communicate("" if engine == "antigravity" else prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         stop(p)
         out, err = p.communicate()
@@ -396,11 +410,15 @@ def run_engine(engine: str, prompt: str, log: Path, timeout: int, schema: Path =
                    encoding="utf-8")
     if CLOSING.is_set():
         return closed
-    if engine in ("claude", "deepseek"):
+    if engine in ("claude", "deepseek", "antigravity"):
         try:
             env = json.loads(out[out.find("{"):])
         except ValueError:
             return False, (err or out).strip()[-600:] or f"{ENGINES[engine]} exited with code {p.returncode}"
+        if engine == "antigravity":  # {"status": "SUCCESS", "response": ..., "error": ..., "denied_actions": [...]}
+            answer = str(env.get("response") or "").strip()
+            text = answer or str(env.get("error") or err.strip()[-600:]).strip()
+            return env.get("status") == "SUCCESS" and p.returncode == 0 and bool(answer), text
         return env.get("subtype") == "success" and not env.get("is_error"), str(env.get("result") or "").strip()
     text = reply.read_text(encoding="utf-8", errors="replace").strip() if reply.exists() else ""
     return p.returncode == 0 and bool(text), text or err.strip()[-600:] or f"Codex exited with code {p.returncode}"
@@ -539,7 +557,7 @@ class Agent:
 
     def create(self, job_id: str, engine: str):
         """Starts an application: the engine reads the posting first and lists the skills to ask him about."""
-        if engine not in ENGINES:
+        if engine not in BUILD_ENGINES:
             return
         with self._store.lock:
             builds = self._store.data["jobs"][job_id].setdefault("builds", [])
@@ -941,6 +959,13 @@ def selftest():
     claude, codex = (engine_cmd(e, DEFAULTS, Path("r.txt"), light=True) for e in ("claude", "codex"))
     assert claude[claude.index("--model") + 1] == "sonnet" and claude[claude.index("--tools") + 1] == ""
     assert codex[codex.index("-s") + 1] == "read-only" and codex[codex.index("-C") + 1] == str(LIGHT)
+    agy = engine_cmd("antigravity", DEFAULTS, Path("r.txt"), light=True, task=LIGHT / "x.task.md", timeout=600,
+                     prompt="Translate this.")
+    assert agy[agy.index("-p") + 1] == "Translate this." and agy[agy.index("--print-timeout") + 1] == "10m"
+    assert agy[agy.index("--model") + 1] == "gemini-3.8-flash-high"
+    long = engine_cmd("antigravity", DEFAULTS, Path("r.txt"), light=True, task=LIGHT / "x.task.md", prompt="x" * 20000)
+    assert "x.task.md" in long[long.index("-p") + 1]
+    assert "antigravity" in ENGINES and "antigravity" not in BUILD_ENGINES
     ds_settings = {**DEFAULTS, "deepseek_key": "sk-selftest"}
     ds = engine_cmd("deepseek", ds_settings, Path("r.txt"))
     assert ds[ds.index("--model") + 1] == "deepseek-flash[1m]" and "sk-selftest" not in " ".join(ds)
